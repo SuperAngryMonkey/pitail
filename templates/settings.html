@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+{% block title %}Settings — PiTail{% endblock %}
+
+{% block content %}
+<div class="page">
+  <div class="page-title"><span class="icon">◈</span> Settings</div>
+
+  {% if msg %}
+    <div class="alert alert-{{ msg[0] }}">{{ msg[1] }}</div>
+  {% endif %}
+
+  <div class="grid-2">
+    <!-- Change password -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Change Password</span>
+      </div>
+      <form method="POST">
+        <input type="hidden" name="action" value="change_password">
+        <div class="form-group">
+          <label>Current Password</label>
+          <input type="password" name="current_password" required>
+        </div>
+        <div class="form-group">
+          <label>New Password</label>
+          <input type="password" name="new_password" required minlength="6">
+        </div>
+        <div class="form-group">
+          <label>Confirm New Password</label>
+          <input type="password" name="confirm_password" required>
+        </div>
+        <button type="submit" class="btn btn-primary">Update Password</button>
+      </form>
+    </div>
+
+    <!-- Change username -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Login Username</span>
+      </div>
+      <form method="POST">
+        <input type="hidden" name="action" value="change_username">
+        <div class="form-group">
+          <label>Current Username</label>
+          <input type="text" value="{{ cfg.username }}" disabled style="opacity:.5;">
+        </div>
+        <div class="form-group">
+          <label>New Username</label>
+          <input type="text" name="new_username" required>
+        </div>
+        <button type="submit" class="btn btn-warn">Change Username</button>
+      </form>
+    </div>
+
+    <!-- Hotspot settings -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Hotspot Name</span>
+      </div>
+      <form method="POST">
+        <input type="hidden" name="action" value="change_hotspot">
+        <div class="form-group">
+          <label>Default Hotspot SSID</label>
+          <input type="text" name="adhoc_ssid" value="{{ cfg.adhoc_ssid }}">
+        </div>
+        <button type="submit" class="btn btn-ghost">Save</button>
+      </form>
+    </div>
+
+    <!-- Power -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Power</span>
+      </div>
+      <div class="btn-group" style="flex-direction:column; gap:10px;">
+        <form method="POST">
+          <input type="hidden" name="action" value="reboot">
+          <button type="submit" class="btn btn-warn"
+                  onclick="return confirm('Reboot the device?')">
+            Reboot
+          </button>
+        </form>
+        <form method="POST">
+          <input type="hidden" name="action" value="shutdown">
+          <button type="submit" class="btn btn-danger"
+                  onclick="return confirm('Shut down the device?')">
+            Shutdown
+          </button>
+        </form>
+      </div>
+      <p class="small" style="margin-top:14px; color:var(--muted); line-height:1.6;">
+        After shutdown you will need to power-cycle the Pi to bring it back.
+      </p>
+    </div>
+  </div>
+
+  <!-- USB OTG info -->
+  <div class="card" style="border-color:rgba(88,166,255,.2);">
+    <div class="card-header">
+      <span class="card-title">USB Connection (OTG)</span>
+      <span class="small" style="color:var(--accent);">Info</span>
+    </div>
+    <p class="small" style="line-height:1.8; margin-bottom:10px;">
+      This device is configured as a USB OTG ethernet gadget. When connected via
+      USB cable to a computer, it appears as a network adapter with IP
+      <strong>192.168.7.2</strong> — access this page at
+      <a href="http://192.168.7.2:5000" style="color:var(--accent);">
+        http://192.168.7.2:5000
+      </a>.
+    </p>
+    <p class="small" style="line-height:1.8;">
+      No drivers needed on Windows 10+, macOS, or Linux.
+      If Windows asks for a driver, choose "USB Ethernet/RNDIS Gadget".
+    </p>
+  </div>
+</div>
+{% endblock %}

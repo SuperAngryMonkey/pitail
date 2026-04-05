@@ -1,0 +1,232 @@
+{% extends "base.html" %}
+{% block title %}WiFi — PiTail{% endblock %}
+
+{% block content %}
+<div class="page">
+  <div class="page-title"><span class="icon">◈</span> WiFi Management</div>
+
+  <!-- Current status -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">Current Connection</span>
+      <span id="wifi-dot" class="dot {{ 'green' if wifi.ssid and not hotspot else ('yellow' if hotspot else '') }}"></span>
+    </div>
+    {% if hotspot %}
+      <div class="alert alert-warn" style="margin-bottom:12px;">
+        Hotspot mode is active — clients can connect to configure WiFi.
+      </div>
+    {% endif %}
+    <div class="grid-2">
+      <div>
+        <div class="stat-row">
+          <span class="stat-label">Mode</span>
+          <span class="stat-value">{{ 'Hotspot' if hotspot else wifi.mode }}</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">SSID</span>
+          <span class="stat-value accent" id="cur-ssid">{{ wifi.ssid or '—' }}</span>
+        </div>
+      </div>
+      <div>
+        <div class="stat-row">
+          <span class="stat-label">IP Address</span>
+          <span class="stat-value accent" id="cur-ip">{{ wifi.ip or '—' }}</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">Signal</span>
+          <span class="stat-value" id="cur-sig">
+            {% if wifi.signal %}{{ wifi.signal }} dBm{% else %}—{% endif %}
+          </span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Hotspot controls -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">Setup Hotspot</span>
+      <span class="small">Connect to Pi when no WiFi available</span>
+    </div>
+    <p class="small" style="margin-bottom:16px; line-height:1.7;">
+      When no WiFi network is available, start a hotspot. Connect your phone or
+      laptop to the hotspot SSID, browse to <strong>http://192.168.50.1:5000</strong>
+      to configure WiFi or Tailscale.
+    </p>
+    <div class="grid-2">
+      <div class="form-group">
+        <label>Hotspot SSID</label>
+        <input type="text" id="hs-ssid" value="{{ config.adhoc_ssid if config else 'PiTail-Setup' }}">
+      </div>
+      <div class="form-group">
+        <label>Hotspot Password</label>
+        <input type="password" id="hs-pass" placeholder="pitail123">
+      </div>
+    </div>
+    <div class="btn-group">
+      {% if not hotspot %}
+        <button type="button" class="btn btn-warn" onclick="startHotspot()">Start Hotspot</button>
+      {% else %}
+        <button type="button" class="btn btn-ghost" onclick="stopHotspot()">Stop Hotspot</button>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Connect to network -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">Connect to Network</span>
+      <button type="button" class="btn btn-ghost btn-sm" onclick="scanNow()" id="scan-btn">
+        <span id="scan-spinner" style="display:none;" class="spinner"></span>
+        Scan
+      </button>
+    </div>
+
+    <div id="scan-results" style="margin-bottom:16px;">
+      <div class="small" style="color:var(--muted); padding:10px 0;">
+        Press Scan to find available networks.
+      </div>
+    </div>
+
+    <hr>
+    <div style="margin-top:16px;">
+      <div class="form-group">
+        <label>SSID</label>
+        <input type="text" id="conn-ssid" placeholder="Network name">
+      </div>
+      <div class="form-group">
+        <label>Password (leave blank for open)</label>
+        <input type="password" id="conn-pass" placeholder="••••••••">
+      </div>
+      <button type="button" class="btn btn-primary" onclick="connectWifi()" id="conn-btn">
+        Connect
+      </button>
+      <span id="conn-status" class="small" style="margin-left:12px;"></span>
+    </div>
+  </div>
+
+  <!-- Saved networks -->
+  {% if saved %}
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">Saved Networks</span>
+    </div>
+    <table>
+      <thead>
+        <tr><th>Network</th><th>Action</th></tr>
+      </thead>
+      <tbody>
+        {% for net in saved %}
+        <tr>
+          <td class="mono">{{ net }}</td>
+          <td>
+            <button type="button" class="btn btn-danger btn-sm"
+                    onclick="forgetWifi('{{ net }}')">Forget</button>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function sigBar(dbm) {
+  const pct = Math.max(0, Math.min(100, (dbm + 90) * 2));
+  const color = pct > 60 ? 'var(--accent2)' : pct > 30 ? 'var(--warn)' : 'var(--danger)';
+  return `<span style="display:inline-block;width:40px;height:6px;background:var(--border);border-radius:3px;overflow:hidden;">
+    <span style="display:block;width:${pct}%;height:100%;background:${color};"></span></span>`;
+}
+
+async function scanNow() {
+  const btn = document.getElementById('scan-btn');
+  const spin = document.getElementById('scan-spinner');
+  btn.disabled = true;
+  spin.style.display = 'inline-block';
+  document.getElementById('scan-results').innerHTML =
+    '<div class="small" style="color:var(--muted);padding:10px 0;">Scanning…</div>';
+  try {
+    const r = await api('/api/wifi/scan');
+    if (!r.ok || !r.networks.length) {
+      document.getElementById('scan-results').innerHTML =
+        '<div class="small" style="color:var(--muted);padding:10px 0;">No networks found.</div>';
+      return;
+    }
+    let html = '<table><thead><tr><th>SSID</th><th>Signal</th><th>Security</th><th></th></tr></thead><tbody>';
+    for (const n of r.networks) {
+      html += `<tr>
+        <td class="mono">${n.ssid}</td>
+        <td>${sigBar(n.signal_dbm || -90)} <span class="small">${(n.signal_dbm||'—')}</span></td>
+        <td class="small">${n.security || 'Open'}</td>
+        <td><button type="button" class="btn btn-ghost btn-sm"
+            onclick="selectNet('${n.ssid.replace(/'/g,"\\'")}')">Select</button></td>
+      </tr>`;
+    }
+    html += '</tbody></table>';
+    document.getElementById('scan-results').innerHTML = html;
+  } catch(e) {
+    toast('Scan failed', 'err');
+  } finally {
+    btn.disabled = false;
+    spin.style.display = 'none';
+  }
+}
+
+function selectNet(ssid) {
+  document.getElementById('conn-ssid').value = ssid;
+  document.getElementById('conn-pass').focus();
+}
+
+async function connectWifi() {
+  const ssid = document.getElementById('conn-ssid').value.trim();
+  const pass = document.getElementById('conn-pass').value;
+  if (!ssid) { toast('Enter an SSID', 'err'); return; }
+  const btn = document.getElementById('conn-btn');
+  const status = document.getElementById('conn-status');
+  btn.disabled = true;
+  status.textContent = 'Connecting…';
+  try {
+    const r = await api('/api/wifi/connect', 'POST', {ssid, password: pass});
+    if (r.ok) {
+      toast('Connected to ' + ssid, 'ok');
+      status.textContent = '✓ Connected';
+      status.style.color = 'var(--accent2)';
+      setTimeout(() => location.reload(), 2500);
+    } else {
+      toast(r.msg || 'Connection failed', 'err');
+      status.textContent = r.msg || 'Failed';
+      status.style.color = 'var(--danger)';
+    }
+  } catch(e) {
+    toast('Error connecting', 'err');
+    status.textContent = 'Error';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function forgetWifi(ssid) {
+  if (!confirm(`Forget "${ssid}"?`)) return;
+  const r = await api('/api/wifi/forget', 'POST', {ssid});
+  toast(r.ok ? `Forgot ${ssid}` : r.msg, r.ok ? 'ok' : 'err');
+  if (r.ok) setTimeout(() => location.reload(), 1000);
+}
+
+async function startHotspot() {
+  const ssid = document.getElementById('hs-ssid').value.trim() || 'PiTail-Setup';
+  const pass = document.getElementById('hs-pass').value || 'pitail123';
+  const r = await api('/api/hotspot/start', 'POST', {ssid, password: pass});
+  toast(r.ok ? `Hotspot "${ssid}" started` : r.msg, r.ok ? 'ok' : 'err');
+  if (r.ok) setTimeout(() => location.reload(), 2000);
+}
+
+async function stopHotspot() {
+  const r = await api('/api/hotspot/stop', 'POST', {});
+  toast(r.ok ? 'Hotspot stopped' : r.msg, r.ok ? 'ok' : 'err');
+  if (r.ok) setTimeout(() => location.reload(), 2000);
+}
+</script>
+{% endblock %}

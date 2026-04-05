@@ -1,0 +1,188 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — PiTail{% endblock %}
+
+{% block content %}
+<div class="page">
+  <div class="page-title">
+    <span class="icon">◈</span> Dashboard
+    <span class="small" id="last-update" style="margin-left:auto;"></span>
+  </div>
+
+  <div class="grid-2">
+    <!-- System card -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">System</span>
+        <span id="temp-badge" class="small">—</span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-label">Hostname</span>
+        <span class="stat-value accent" id="sys-hostname">{{ sysinfo.hostname }}</span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-label">Uptime</span>
+        <span class="stat-value" id="sys-uptime">{{ sysinfo.uptime or '—' }}</span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-label">Memory</span>
+        <span class="stat-value" id="sys-mem">
+          {% if sysinfo.mem %}
+            {{ sysinfo.mem.used }}M / {{ sysinfo.mem.total }}M
+            ({{ sysinfo.mem.pct }}%)
+          {% else %}—{% endif %}
+        </span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-label">IP(s)</span>
+        <span class="stat-value accent" id="sys-ips">
+          {{ sysinfo.ips | join(', ') or '—' }}
+        </span>
+      </div>
+    </div>
+
+    <!-- WiFi card -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">WiFi</span>
+        <span id="wifi-dot" class="dot {% if wifi.ssid %}green{% endif %}"></span>
+      </div>
+      {% if hotspot %}
+        <div class="alert alert-warn" style="margin-bottom:12px;">
+          Hotspot / Ad-hoc mode active
+        </div>
+      {% endif %}
+      <div class="stat-row">
+        <span class="stat-label">Mode</span>
+        <span class="stat-value" id="wifi-mode">{{ wifi.mode }}</span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-label">SSID</span>
+        <span class="stat-value" id="wifi-ssid">{{ wifi.ssid or '—' }}</span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-label">IP</span>
+        <span class="stat-value accent" id="wifi-ip">{{ wifi.ip or '—' }}</span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-label">Signal</span>
+        <span class="stat-value" id="wifi-sig">
+          {% if wifi.signal %}{{ wifi.signal }} dBm{% else %}—{% endif %}
+        </span>
+      </div>
+      <div style="margin-top:14px;">
+        <a href="/wifi" class="btn btn-ghost btn-sm">Manage WiFi →</a>
+      </div>
+    </div>
+
+    <!-- Tailscale card -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Tailscale</span>
+        <span id="ts-dot" class="dot
+          {% if ts.installed and ts.online %}blue
+          {% elif ts.installed %}yellow
+          {% endif %}"></span>
+      </div>
+      {% if not ts.installed %}
+        <div class="alert alert-warn">Not installed</div>
+        <a href="/tailscale" class="btn btn-warn btn-sm">Install Tailscale →</a>
+      {% else %}
+        <div class="stat-row">
+          <span class="stat-label">Status</span>
+          <span class="stat-value {% if ts.online %}accent{% else %}warn{% endif %}" id="ts-state">
+            {{ ts.backend_state or 'Unknown' }}
+          </span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">Hostname</span>
+          <span class="stat-value" id="ts-host">{{ ts.hostname or '—' }}</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">Tailscale IP</span>
+          <span class="stat-value accent" id="ts-ip">{{ ts.ts_ip or '—' }}</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">Peers online</span>
+          <span class="stat-value" id="ts-peers">
+            {{ ts.peers | selectattr('online') | list | length }} / {{ ts.peers | length }}
+          </span>
+        </div>
+        <div style="margin-top:14px;">
+          <a href="/tailscale" class="btn btn-ghost btn-sm">Manage Tailscale →</a>
+        </div>
+      {% endif %}
+    </div>
+
+    <!-- Quick actions card -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Quick Actions</span>
+      </div>
+      <div class="btn-group" style="flex-direction:column; gap:10px;">
+        {% if not hotspot %}
+          <button type="button" class="btn btn-warn" onclick="startHotspot()">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="2">
+              <path d="M5 12.55a11 11 0 0 1 14.08 0M1.42 9a16 16 0 0 1 21.16 0
+                       M8.53 16.11a6 6 0 0 1 6.95 0M12 20h.01"/>
+            </svg>
+            Start Setup Hotspot
+          </button>
+        {% else %}
+          <button type="button" class="btn btn-ghost" onclick="stopHotspot()">
+            Stop Hotspot
+          </button>
+        {% endif %}
+        <button type="button" class="btn btn-ghost" onclick="if(confirm('Reboot?')) reboot()">
+          Reboot Device
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function startHotspot() {
+  const r = await api('/api/hotspot/start', 'POST', {});
+  toast(r.msg || (r.ok ? 'Hotspot started' : 'Failed'), r.ok ? 'ok' : 'err');
+  if (r.ok) setTimeout(() => location.reload(), 2000);
+}
+async function stopHotspot() {
+  const r = await api('/api/hotspot/stop', 'POST', {});
+  toast(r.msg || (r.ok ? 'Hotspot stopped' : 'Failed'), r.ok ? 'ok' : 'err');
+  if (r.ok) setTimeout(() => location.reload(), 2000);
+}
+async function reboot() {
+  await fetch('/settings', {
+    method: 'POST',
+    headers: {'Content-Type':'application/x-www-form-urlencoded'},
+    body: 'action=reboot'
+  });
+  toast('Rebooting…', 'info', 8000);
+}
+
+// Periodic refresh of system info
+async function refreshSysInfo() {
+  try {
+    const d = await api('/api/system/info');
+    document.getElementById('sys-hostname').textContent = d.hostname || '—';
+    document.getElementById('sys-uptime').textContent   = d.uptime   || '—';
+    document.getElementById('sys-ips').textContent      = (d.ips||[]).join(', ') || '—';
+    if (d.mem) {
+      document.getElementById('sys-mem').textContent =
+        `${d.mem.used}M / ${d.mem.total}M (${d.mem.pct}%)`;
+    }
+    if (d.temp_c != null) {
+      const b = document.getElementById('temp-badge');
+      b.textContent = `${d.temp_c} °C`;
+      b.style.color = d.temp_c > 70 ? 'var(--danger)' : 'var(--muted)';
+    }
+    document.getElementById('last-update').textContent =
+      'updated ' + new Date().toLocaleTimeString();
+  } catch(e) {}
+}
+setInterval(refreshSysInfo, 15000);
+</script>
+{% endblock %}
