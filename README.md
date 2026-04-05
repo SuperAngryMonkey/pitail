@@ -1,74 +1,111 @@
 # PiTail
 
-Standalone network management web app for Raspberry Pi Zero W2.
+> Zero-terminal network management for Raspberry Pi Zero W2
 
-No terminal needed after install. Access via WiFi, USB cable, or auto-generated hotspot.
+PiTail is a lightweight web app that lets you manage WiFi, Tailscale, and optionally a PiSugar battery on a Pi Zero W2 — entirely from a browser. No keyboard, no monitor, no terminal required after the one-time install.
 
 ---
 
-## What it does
+## Features
 
-| Feature | Details |
-|---|---|
-| **Login page** | Username/password auth (default: admin / pitail) |
-| **Dashboard** | System info, WiFi & Tailscale status at a glance |
-| **WiFi management** | Scan networks, connect, forget saved networks |
-| **Auto-hotspot** | If no WiFi after ~2 min, Pi creates `PiTail-Setup` hotspot automatically |
-| **Tailscale** | Install, connect, auth key, advertise routes/exit node, peer list |
-| **USB OTG** | Connect via USB cable → Pi appears as ethernet adapter at `192.168.7.2` |
-| **Settings** | Change login credentials, hotspot SSID, reboot/shutdown |
+- 🔐 **Login page** — username/password auth, change credentials in UI
+- 📡 **WiFi management** — scan, connect, forget networks from the browser
+- 🌐 **Tailscale** — install, authenticate, connect/disconnect, advertise routes, view peers
+- 🔁 **Auto-hotspot fallback** — if no WiFi after boot, Pi creates `PiTail-Setup` hotspot automatically
+- 🔌 **USB OTG** — plug a USB cable into your PC, access UI at `192.168.7.2:5000` with no WiFi
+- 🔋 **PiSugar battery** *(optional, off by default)* — battery gauge, charge protection, auto-shutdown, RTC sync, button mapping
+- ⚙️ **Settings** — toggle hardware integrations, change credentials, hotspot SSID, reboot/shutdown
+
+---
+
+## Access Methods
+
+| Method | URL | When to use |
+|---|---|---|
+| WiFi | `http://<pi-ip>:5000` or `http://pitail.local:5000` | Normal operation |
+| USB Cable | `http://192.168.7.2:5000` | Always works, no WiFi needed |
+| Auto-Hotspot | `http://192.168.50.1:5000` | Auto-activates ~2 min after boot if no WiFi |
+
+### USB OTG
+Connect the Pi's **data** USB port (middle port on Zero W2) to your PC. Pi appears as a USB ethernet adapter — no drivers needed on Windows 10+, macOS, or Linux.
+
+### Auto-Hotspot
+A background watchdog monitors WiFi. If no connection after ~2 minutes it creates:
+- **SSID**: `PiTail-Setup`  **Password**: `pitail123`
+
+Connect and browse to `http://192.168.50.1:5000`. Once you configure WiFi, the hotspot stops automatically.
 
 ---
 
 ## Install
 
 ```bash
-git clone https://github.com/youruser/pitail  # or copy files to Pi
+git clone https://github.com/SuperAngryMonkey/pitail.git
 cd pitail
 sudo bash install.sh
 sudo reboot   # required for USB OTG
 ```
 
-Requires: Raspberry Pi OS Lite (Bookworm), Pi Zero W2.
-
----
-
-## Access Methods
-
-### 1. Normal WiFi
-If the Pi is connected to your network:
-```
-http://<pi-ip>:5000
-http://raspberrypi.local:5000
-```
-
-### 2. USB Cable (no WiFi needed)
-Connect Pi's **data** USB port (the middle port on Zero W2) to your PC:
-- Windows/macOS/Linux: Pi appears as a USB ethernet adapter
-- Browse to: `http://192.168.7.2:5000`
-- No drivers needed on modern OS
-
-> **Windows only**: If prompted, choose "USB Ethernet/RNDIS Gadget" driver
-
-### 3. Auto Hotspot (no WiFi configured)
-If no WiFi network is reachable after boot, the Pi automatically creates:
-- **SSID**: `PiTail-Setup`
-- **Password**: `pitail123`
-- Connect your phone/laptop to that SSID
-- Browse to: `http://192.168.50.1:5000`
-
-Use the WiFi page to configure your home network, then the hotspot will stop.
+**Requirements:** Raspberry Pi OS Lite (Bookworm), Pi Zero 2 W, internet access for Tailscale.
 
 ---
 
 ## Default Credentials
 
-| Field | Value |
+| Field | Default |
 |---|---|
 | Username | `admin` |
 | Password | `pitail` |
 
-**Change these on first login** via Settings.
+**Change immediately** after first login via Settings.
+
+---
+
+## PiSugar Battery (Optional)
+
+PiSugar support is **disabled by default** — it only activates if you turn it on in Settings. This keeps the app lightweight for everyone who doesn't have a PiSugar.
+
+### Enabling PiSugar
+
+1. Go to **Settings → Hardware Integrations**
+2. Toggle **PiSugar Battery** on
+3. A **🔋 Battery** link appears in the navigation
+
+### What you get
+
+| Feature | Description |
+|---|---|
+| Live battery gauge | % charge with color-coded bar |
+| Voltage display | Real-time battery voltage |
+| Charging status | Plugged / charging / full / discharging |
+| Auto-shutdown | Set low battery % threshold to trigger clean shutdown |
+| Charge protection | Limit charge to 80% to extend battery lifespan |
+| RTC sync | Sync Pi clock ↔ RTC or from internet |
+| Button mapping | Map single/long press to shutdown, reboot, etc. |
+
+### PiSugar Power Manager install
+
+If not already installed, the Battery page has an **Install** button that downloads and runs the official PiSugar installer. Requires internet access.
+
+Manual install:
+```bash
+wget https://cdn.pisugar.com/release/pisugar-power-manager.sh
+bash pisugar-power-manager.sh -c release
+```
+
+### I2C requirement
+
+PiSugar communicates over I2C. Enable it on first boot:
+```bash
+sudo raspi-config
+# Interface Options → I2C → Yes
+sudo reboot
+```
+
+### Supported models
+
+- PiSugar 3 (1200mAh)
+- PiSugar 3 Plus (5000mAh)
 
 ---
 
@@ -76,17 +113,18 @@ Use the WiFi page to configure your home network, then the hotspot will stop.
 
 ```
 pitail/
-├── app.py              # Flask app (all routes + logic)
-├── install.sh          # Installer
+├── app.py              # Flask app — all routes and backend logic
+├── install.sh          # One-time installer
 ├── pitail.conf         # Auto-generated config (credentials, settings)
 ├── templates/
-│   ├── base.html       # Shared nav + styles
+│   ├── base.html       # Shared nav + CSS
 │   ├── login.html      # Login page
 │   ├── index.html      # Dashboard
 │   ├── wifi.html       # WiFi management
 │   ├── tailscale.html  # Tailscale management
-│   └── settings.html   # Settings page
-└── static/             # Static assets (empty by default)
+│   ├── battery.html    # PiSugar battery management (shown when enabled)
+│   └── settings.html   # Settings + hardware toggles + power controls
+└── static/             # Static assets
 ```
 
 ---
@@ -94,57 +132,57 @@ pitail/
 ## Services
 
 ```bash
-# Web app
 sudo systemctl status pitail
 sudo journalctl -u pitail -f
 
-# WiFi watchdog (auto-hotspot)
 sudo systemctl status pitail-wifi-watch
 sudo journalctl -u pitail-wifi-watch -f
 ```
 
 ---
 
-## Tailscale
+## Tailscale Setup
 
-If Tailscale is not installed when you run `install.sh` and the Pi has internet, it installs automatically.
+Get an auth key from: https://login.tailscale.com/admin/settings/keys
 
-If no internet at install time, you can install later via the Tailscale page in the UI (button appears when it's missing).
-
-For first-time Tailscale auth, get a key from:
-https://login.tailscale.com/admin/settings/keys
-
-Paste it in the Tailscale page → "Auth Key" field.
-
----
-
-## Changing the hotspot SSID/password
-
-In the Settings page → "Hotspot Name", or edit `pitail.conf` directly:
-
-```json
-{
-  "adhoc_ssid": "MyPiTail"
-}
-```
-
-The hotspot password defaults to `pitail123` — change it in the WiFi page when starting the hotspot manually.
+Paste into **Tailscale → Auth Key** and click Connect.
 
 ---
 
 ## USB OTG Troubleshooting
 
-The install script edits `/boot/firmware/cmdline.txt` and `/boot/firmware/config.txt`.
-A reboot is **required** after install.
+**Windows**: If adapter doesn't appear, install RNDIS driver:  
+https://modclouddownloadprod.blob.core.windows.net/shared/mod-rndis-driver-windows.zip
 
-On Windows: Device Manager → Network Adapters → look for "USB Ethernet/RNDIS Gadget".
-If missing, install from: https://modclouddownloadprod.blob.core.windows.net/shared/mod-rndis-driver-windows.zip
+**macOS / Linux**: Works automatically.
 
 ---
 
-## Requirements
+## Changelog
 
-- Raspberry Pi Zero 2 W
-- Raspberry Pi OS Lite (Bookworm, 64-bit recommended)
-- Python 3.9+
-- NetworkManager (included in Bookworm Lite)
+### v2.0
+- Added PiSugar 3 battery integration (disabled by default)
+- Battery page: gauge, voltage, charge state, auto-shutdown, charge protection, RTC sync, button mapping
+- Settings: hardware integration toggle (PiSugar on/off)
+- Dashboard: battery card when PiSugar enabled
+- Navigation: Battery link appears only when PiSugar enabled
+
+### v1.0
+- Initial release: WiFi management, Tailscale, auto-hotspot, USB OTG
+
+---
+
+## Tech Stack
+
+- **Python 3** / **Flask** — web framework
+- **NetworkManager** (`nmcli`) — WiFi management
+- **Tailscale** — secure remote access
+- **PiSugar Power Manager** — battery management (optional)
+- **systemd** — service management
+- **USB OTG** (`g_ether` / `dwc2`) — USB ethernet gadget
+
+---
+
+## License
+
+MIT

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-PiTail – Standalone Tailscale + WiFi management app for Raspberry Pi Zero W2
+PiTail v2 – Standalone Tailscale + WiFi + PiSugar management for Pi Zero W2
 Provides a web UI accessible via WiFi, ad-hoc fallback, or USB OTG ethernet.
 """
 
@@ -25,11 +25,11 @@ app.secret_key = os.environ.get("PITAIL_SECRET", secrets.token_hex(32))
 CONFIG_FILE = os.path.join(os.path.dirname(__file__), "pitail.conf")
 DEFAULT_CONFIG = {
     "username": "admin",
-    # Default password: "pitail" — change on first login
     "password_hash": hashlib.sha256(b"pitail").hexdigest(),
     "device_name": "pitail",
     "adhoc_ssid": "PiTail-Setup",
     "adhoc_ip": "192.168.50.1",
+    "pisugar_enabled": False,
 }
 
 _config_lock = threading.Lock()
@@ -40,8 +40,7 @@ def load_config():
         try:
             with open(CONFIG_FILE) as f:
                 data = json.load(f)
-            cfg = {**DEFAULT_CONFIG, **data}
-            return cfg
+            return {**DEFAULT_CONFIG, **data}
         except Exception:
             pass
     return dict(DEFAULT_CONFIG)
@@ -71,7 +70,6 @@ def login_required(f):
 # ─── System helpers ───────────────────────────────────────────────────────────
 
 def run(cmd, timeout=15):
-    """Run a command, return (returncode, stdout, stderr)."""
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
         return r.returncode, r.stdout.strip(), r.stderr.strip()
@@ -104,19 +102,13 @@ def get_system_info():
     temp_c = None
     if cpu_temp and cpu_temp.isdigit():
         temp_c = round(int(cpu_temp) / 1000, 1)
-    return {
-        "hostname": hostname,
-        "ips": ips,
-        "uptime": uptime_out,
-        "mem": mem_mb,
-        "temp_c": temp_c,
-    }
+    return {"hostname": hostname, "ips": ips, "uptime": uptime_out,
+            "mem": mem_mb, "temp_c": temp_c}
 
 
 # ─── WiFi helpers ─────────────────────────────────────────────────────────────
 
 def get_wifi_status():
-    """Return current WiFi connection info."""
     _, out, _ = run(["iwgetid", "-r"])
     ssid = out.strip() if out else None
     _, ip_out, _ = run(["ip", "-4", "addr", "show", "wlan0"])
@@ -138,8 +130,6 @@ def get_wifi_status():
 
 
 def scan_wifi():
-    """Scan for available networks. Returns list of dicts."""
-    # Trigger a scan
     run(["sudo", "/sbin/iw", "dev", "wlan0", "scan", "trigger"], timeout=5)
     time.sleep(2)
     _, out, _ = run(["sudo", "/sbin/iw", "dev", "wlan0", "scan"], timeout=10)
@@ -166,47 +156,31 @@ def scan_wifi():
                 current.setdefault("security", "WEP/WPA")
         if current.get("ssid"):
             networks.append(current)
-    # Deduplicate by SSID, keep strongest signal
     seen = {}
     for n in networks:
         ssid = n["ssid"]
         sig = n.get("signal_dbm", -100)
         if ssid not in seen or sig > seen[ssid].get("signal_dbm", -100):
             seen[ssid] = n
-    result = sorted(seen.values(),
-                    key=lambda x: x.get("signal_dbm", -100), reverse=True)
-    return result
+    return sorted(seen.values(), key=lambda x: x.get("signal_dbm", -100), reverse=True)
 
 
 def connect_wifi(ssid, password):
-    """Connect to a WiFi network using nmcli."""
     if password:
-        rc, out, err = run(
-            ["sudo", "nmcli", "device", "wifi", "connect", ssid,
-             "password", password, "ifname", "wlan0"],
-            timeout=30
-        )
+        rc, out, err = run(["sudo", "nmcli", "device", "wifi", "connect", ssid,
+                            "password", password, "ifname", "wlan0"], timeout=30)
     else:
-        rc, out, err = run(
-            ["sudo", "nmcli", "device", "wifi", "connect", ssid,
-             "ifname", "wlan0"],
-            timeout=30
-        )
-    success = rc == 0
-    msg = out or err
-    return success, msg
+        rc, out, err = run(["sudo", "nmcli", "device", "wifi", "connect", ssid,
+                            "ifname", "wlan0"], timeout=30)
+    return rc == 0, out or err
 
 
 def forget_wifi(ssid):
-    """Delete a saved WiFi connection."""
-    rc, out, err = run(
-        ["sudo", "nmcli", "connection", "delete", ssid], timeout=10
-    )
+    rc, out, err = run(["sudo", "nmcli", "connection", "delete", ssid], timeout=10)
     return rc == 0, out or err
 
 
 def list_saved_wifi():
-    """List saved WiFi connections."""
     _, out, _ = run(["nmcli", "-t", "-f", "NAME,TYPE", "connection", "show"])
     nets = []
     if out:
@@ -217,16 +191,14 @@ def list_saved_wifi():
     return nets
 
 
-# ─── Ad-hoc / hotspot helpers ─────────────────────────────────────────────────
+# ─── Hotspot helpers ──────────────────────────────────────────────────────────
 
 def get_adhoc_status():
-    """Check if we're currently in ad-hoc or hotspot mode."""
     _, out, _ = run(["nmcli", "-t", "-f", "NAME,TYPE,ACTIVE",
                      "connection", "show", "--active"])
     for line in out.splitlines() if out else []:
         if "hotspot" in line.lower() or "adhoc" in line.lower() or "ap" in line.lower():
             return True
-    # Also check iw
     _, iw_out, _ = run(["iw", "dev", "wlan0", "info"])
     if iw_out and "type AP" in iw_out:
         return True
@@ -234,24 +206,15 @@ def get_adhoc_status():
 
 
 def start_hotspot(ssid="PiTail-Setup", password="pitail123"):
-    """Start a hotspot using nmcli."""
-    # Delete old pitail-hotspot connection if any
     run(["sudo", "nmcli", "connection", "delete", "pitail-hotspot"], timeout=10)
-    rc, out, err = run([
-        "sudo", "nmcli", "device", "wifi", "hotspot",
-        "ifname", "wlan0",
-        "con-name", "pitail-hotspot",
-        "ssid", ssid,
-        "password", password,
-    ], timeout=20)
+    rc, out, err = run(["sudo", "nmcli", "device", "wifi", "hotspot",
+                        "ifname", "wlan0", "con-name", "pitail-hotspot",
+                        "ssid", ssid, "password", password], timeout=20)
     return rc == 0, out or err
 
 
 def stop_hotspot():
-    """Stop hotspot and return to managed mode."""
-    rc, out, err = run(
-        ["sudo", "nmcli", "connection", "down", "pitail-hotspot"], timeout=10
-    )
+    rc, out, err = run(["sudo", "nmcli", "connection", "down", "pitail-hotspot"], timeout=10)
     run(["sudo", "nmcli", "device", "disconnect", "wlan0"], timeout=10)
     return rc == 0, out or err
 
@@ -288,7 +251,6 @@ def get_tailscale_status():
             "exit_node": peer.get("ExitNode", False),
         })
     _, ip_out, _ = run([TS_BIN, "ip", "-4"], timeout=5)
-    ts_ip = ip_out.strip() if rc == 0 else ""
     backend_state = data.get("BackendState", "Unknown")
     return {
         "installed": True,
@@ -296,12 +258,124 @@ def get_tailscale_status():
         "backend_state": backend_state,
         "hostname": self_info.get("HostName", ""),
         "dns_name": self_info.get("DNSName", "").rstrip("."),
-        "ts_ip": ts_ip or (self_info.get("TailscaleIPs") or [""])[0],
+        "ts_ip": ip_out or (self_info.get("TailscaleIPs") or [""])[0],
         "peers": peers,
         "advertised_routes": self_info.get("PrimaryRoutes", []),
         "exit_node": self_info.get("ExitNodeForNetwork", False),
     }
 
+
+# ─── PiSugar helpers ──────────────────────────────────────────────────────────
+
+PISUGAR_HOST = "127.0.0.1"
+PISUGAR_PORT = 8423
+PISUGAR_TIMEOUT = 3
+
+
+def pisugar_server_running():
+    rc, out, _ = run(["systemctl", "is-active", "pisugar-server"], timeout=5)
+    return out.strip() == "active"
+
+
+def pisugar_cmd(command):
+    """Send a command to pisugar-server TCP socket, return response string."""
+    try:
+        with socket.create_connection(
+                (PISUGAR_HOST, PISUGAR_PORT), timeout=PISUGAR_TIMEOUT) as s:
+            s.sendall((command + "\n").encode())
+            response = b""
+            s.settimeout(PISUGAR_TIMEOUT)
+            while True:
+                try:
+                    chunk = s.recv(1024)
+                    if not chunk:
+                        break
+                    response += chunk
+                    if b"\n" in chunk:
+                        break
+                except socket.timeout:
+                    break
+        return response.decode(errors="replace").strip()
+    except Exception as e:
+        return f"error: {e}"
+
+
+def pisugar_get(key):
+    """Get a value from pisugar-server. Returns string value or None."""
+    resp = pisugar_cmd(f"get {key}")
+    if resp.startswith(f"{key}:"):
+        return resp[len(key)+1:].strip()
+    return None
+
+
+def get_pisugar_status():
+    if not pisugar_server_running():
+        return {"available": False, "error": "pisugar-server not running"}
+    try:
+        def to_float(v):
+            try:
+                return float(v) if v else None
+            except (ValueError, TypeError):
+                return None
+
+        def to_bool(v):
+            return str(v).lower() == "true" if v else False
+
+        battery  = pisugar_get("battery")
+        voltage  = pisugar_get("battery_v")
+        charging = pisugar_get("battery_charging")
+        plugged  = pisugar_get("battery_power_plugged")
+        model    = pisugar_get("model")
+        rtc_time = pisugar_get("rtc_time")
+        allow_chg   = pisugar_get("battery_allow_charging")
+        chg_range   = pisugar_get("battery_charging_range")
+        shutdown_lvl = pisugar_get("safe_shutdown_level")
+        shutdown_dly = pisugar_get("safe_shutdown_delay")
+
+        chg_low, chg_high = None, None
+        if chg_range:
+            parts = chg_range.split()
+            if len(parts) == 2:
+                chg_low  = to_float(parts[0])
+                chg_high = to_float(parts[1])
+
+        pct = to_float(battery)
+        # Determine charge state label
+        if to_bool(plugged) and to_bool(charging):
+            charge_state = "charging"
+        elif to_bool(plugged) and not to_bool(charging):
+            charge_state = "full"
+        else:
+            charge_state = "discharging"
+
+        return {
+            "available": True,
+            "model": model or "PiSugar 3",
+            "battery_pct": pct,
+            "battery_v": to_float(voltage),
+            "charging": to_bool(charging),
+            "plugged": to_bool(plugged),
+            "charge_state": charge_state,
+            "allow_charging": to_bool(allow_chg),
+            "charge_low": chg_low,
+            "charge_high": chg_high,
+            "rtc_time": rtc_time,
+            "shutdown_level": to_float(shutdown_lvl),
+            "shutdown_delay": to_float(shutdown_dly),
+        }
+    except Exception as e:
+        return {"available": False, "error": str(e)}
+
+
+# ─── Template context ─────────────────────────────────────────────────────────
+
+@app.context_processor
+def inject_globals():
+    cfg = load_config()
+    return {
+        "pisugar_enabled": cfg.get("pisugar_enabled", False),
+        "cfg": cfg,
+    }
 
 # ─── Routes: Auth ─────────────────────────────────────────────────────────────
 
@@ -332,12 +406,14 @@ def logout():
 @app.route("/")
 @login_required
 def index():
+    cfg = load_config()
     sysinfo = get_system_info()
     wifi = get_wifi_status()
     ts = get_tailscale_status()
     hotspot = get_adhoc_status()
-    return render_template("index.html",
-                           sysinfo=sysinfo, wifi=wifi, ts=ts, hotspot=hotspot)
+    pisugar = get_pisugar_status() if cfg.get("pisugar_enabled") else None
+    return render_template("index.html", sysinfo=sysinfo, wifi=wifi, ts=ts,
+                           hotspot=hotspot, pisugar=pisugar, cfg=cfg)
 
 
 # ─── Routes: WiFi ─────────────────────────────────────────────────────────────
@@ -345,17 +421,16 @@ def index():
 @app.route("/wifi")
 @login_required
 def wifi_page():
-    wifi = get_wifi_status()
-    saved = list_saved_wifi()
-    hotspot = get_adhoc_status()
-    return render_template("wifi.html", wifi=wifi, saved=saved, hotspot=hotspot)
+    cfg = load_config()
+    return render_template("wifi.html", wifi=get_wifi_status(),
+                           saved=list_saved_wifi(), hotspot=get_adhoc_status(),
+                           config=cfg)
 
 
 @app.route("/api/wifi/scan")
 @login_required
 def api_wifi_scan():
-    nets = scan_wifi()
-    return jsonify({"ok": True, "networks": nets})
+    return jsonify({"ok": True, "networks": scan_wifi()})
 
 
 @app.route("/api/wifi/connect", methods=["POST"])
@@ -410,8 +485,7 @@ def api_hotspot_stop():
 @app.route("/api/hotspot/status")
 @login_required
 def api_hotspot_status():
-    active = get_adhoc_status()
-    return jsonify({"active": active})
+    return jsonify({"active": get_adhoc_status()})
 
 
 # ─── Routes: Tailscale ────────────────────────────────────────────────────────
@@ -419,8 +493,7 @@ def api_hotspot_status():
 @app.route("/tailscale")
 @login_required
 def tailscale_page():
-    ts = get_tailscale_status()
-    return render_template("tailscale.html", ts=ts)
+    return render_template("tailscale.html", ts=get_tailscale_status())
 
 
 @app.route("/api/tailscale/status")
@@ -435,16 +508,13 @@ def api_ts_up():
     if not tailscale_installed():
         return jsonify({"ok": False, "msg": "Tailscale not installed"})
     data = request.json or {}
-    routes = data.get("routes", "")
-    exit_node = data.get("exit_node", False)
-    auth_key = data.get("auth_key", "")
     cmd = ["sudo", TS_BIN, "up", "--accept-dns=false"]
-    if routes:
-        cmd += [f"--advertise-routes={routes}"]
-    if exit_node:
+    if data.get("routes"):
+        cmd += [f"--advertise-routes={data['routes']}"]
+    if data.get("exit_node"):
         cmd += ["--advertise-exit-node"]
-    if auth_key:
-        cmd += [f"--authkey={auth_key}"]
+    if data.get("auth_key"):
+        cmd += [f"--authkey={data['auth_key']}"]
     rc, out, err = run(cmd, timeout=30)
     return jsonify({"ok": rc == 0, "msg": out or err})
 
@@ -470,14 +540,108 @@ def api_ts_logout():
 @app.route("/api/tailscale/install", methods=["POST"])
 @login_required
 def api_ts_install():
-    """Trigger Tailscale install in background."""
     def do_install():
         run(["sudo", "bash", "-c",
-             "curl -fsSL https://tailscale.com/install.sh | sh"],
-            timeout=120)
+             "curl -fsSL https://tailscale.com/install.sh | sh"], timeout=120)
         run(["sudo", "systemctl", "enable", "--now", "tailscaled"])
     threading.Thread(target=do_install, daemon=True).start()
-    return jsonify({"ok": True, "msg": "Installing Tailscale in background… refresh in ~60s"})
+    return jsonify({"ok": True, "msg": "Installing Tailscale… refresh in ~60s"})
+
+
+# ─── Routes: PiSugar ──────────────────────────────────────────────────────────
+
+@app.route("/battery")
+@login_required
+def battery_page():
+    cfg = load_config()
+    if not cfg.get("pisugar_enabled"):
+        flash("PiSugar is disabled. Enable it in Settings first.", "error")
+        return redirect(url_for("settings_page"))
+    ps = get_pisugar_status()
+    return render_template("battery.html", ps=ps)
+
+
+@app.route("/api/pisugar/status")
+@login_required
+def api_pisugar_status():
+    cfg = load_config()
+    if not cfg.get("pisugar_enabled"):
+        return jsonify({"enabled": False})
+    return jsonify({"enabled": True, **get_pisugar_status()})
+
+
+# Track pisugar install state
+_pisugar_install_state = {"running": False, "done": False, "ok": False, "msg": ""}
+
+
+@app.route("/api/pisugar/install", methods=["POST"])
+@login_required
+def api_pisugar_install():
+    global _pisugar_install_state
+    if _pisugar_install_state["running"]:
+        return jsonify({"ok": True, "msg": "Already installing — please wait…"})
+
+    data = request.json or {}
+    model = str(data.get("model", "3"))   # "1"=PiSugar2, "2"=PiSugar2Pro, "3"=PiSugar3
+
+    def do_install():
+        global _pisugar_install_state
+        _pisugar_install_state = {"running": True, "done": False, "ok": False, "msg": "Downloading installer…"}
+        try:
+            rc, out, err = run(["sudo", "bash", "-c",
+                "wget -q https://cdn.pisugar.com/release/pisugar-power-manager.sh "
+                "-O /tmp/pisugar-pm.sh"], timeout=60)
+            if rc != 0:
+                _pisugar_install_state = {"running": False, "done": True, "ok": False,
+                                          "msg": f"Download failed: {err}"}
+                return
+            _pisugar_install_state["msg"] = "Running installer (selecting PiSugar 3)…"
+            rc, out, err = run(["sudo", "bash", "-c",
+                f"echo {model} | bash /tmp/pisugar-pm.sh -c release"],
+                timeout=300)
+            if rc != 0:
+                _pisugar_install_state = {"running": False, "done": True, "ok": False,
+                                          "msg": f"Install failed: {err or out}"}
+                return
+            run(["sudo", "systemctl", "enable", "pisugar-server"])
+            run(["sudo", "systemctl", "start",  "pisugar-server"])
+            _pisugar_install_state = {"running": False, "done": True, "ok": True,
+                                      "msg": "PiSugar Power Manager installed successfully!"}
+        except Exception as e:
+            _pisugar_install_state = {"running": False, "done": True, "ok": False,
+                                      "msg": str(e)}
+
+    threading.Thread(target=do_install, daemon=True).start()
+    return jsonify({"ok": True, "msg": "Install started…"})
+
+
+@app.route("/api/pisugar/install/status")
+@login_required
+def api_pisugar_install_status():
+    return jsonify(_pisugar_install_state)
+
+
+@app.route("/api/pisugar/cmd", methods=["POST"])
+@login_required
+def api_pisugar_cmd():
+    cfg = load_config()
+    if not cfg.get("pisugar_enabled"):
+        return jsonify({"ok": False, "msg": "PiSugar disabled"})
+    data = request.json or {}
+    command = data.get("command", "").strip()
+    if not command:
+        return jsonify({"ok": False, "msg": "No command provided"})
+    allowed_prefixes = (
+        "rtc_pi2rtc", "rtc_rtc2pi", "rtc_web",
+        "rtc_alarm_set", "rtc_alarm_disable",
+        "set_button_enable", "set_button_shell",
+        "set_safe_shutdown_level", "set_safe_shutdown_delay",
+        "set_battery_charging_range",
+    )
+    if not any(command.startswith(p) for p in allowed_prefixes):
+        return jsonify({"ok": False, "msg": f"Command not permitted: {command}"})
+    resp = pisugar_cmd(command)
+    return jsonify({"ok": True, "response": resp})
 
 
 # ─── Routes: Settings ─────────────────────────────────────────────────────────
@@ -489,9 +653,10 @@ def settings_page():
     msg = None
     if request.method == "POST":
         action = request.form.get("action")
+
         if action == "change_password":
             current = request.form.get("current_password", "")
-            new_pw = request.form.get("new_password", "")
+            new_pw  = request.form.get("new_password", "")
             confirm = request.form.get("confirm_password", "")
             if hash_password(current) != cfg["password_hash"]:
                 msg = ("error", "Current password incorrect.")
@@ -503,6 +668,7 @@ def settings_page():
                 cfg["password_hash"] = hash_password(new_pw)
                 save_config(cfg)
                 msg = ("success", "Password changed successfully.")
+
         elif action == "change_username":
             new_user = request.form.get("new_username", "").strip()
             if not new_user:
@@ -511,18 +677,29 @@ def settings_page():
                 cfg["username"] = new_user
                 save_config(cfg)
                 msg = ("success", f"Username changed to '{new_user}'.")
+
         elif action == "change_hotspot":
             new_ssid = request.form.get("adhoc_ssid", "").strip()
             if new_ssid:
                 cfg["adhoc_ssid"] = new_ssid
                 save_config(cfg)
                 msg = ("success", "Hotspot SSID updated.")
+
+        elif action == "toggle_pisugar":
+            enabled = request.form.get("pisugar_enabled") == "1"
+            cfg["pisugar_enabled"] = enabled
+            save_config(cfg)
+            state = "enabled" if enabled else "disabled"
+            msg = ("success", f"PiSugar integration {state}.")
+
         elif action == "reboot":
             run(["sudo", "reboot"])
             msg = ("success", "Rebooting…")
+
         elif action == "shutdown":
             run(["sudo", "shutdown", "-h", "now"])
             msg = ("success", "Shutting down…")
+
     return render_template("settings.html", cfg=cfg, msg=msg)
 
 

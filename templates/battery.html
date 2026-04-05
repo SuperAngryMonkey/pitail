@@ -1,0 +1,379 @@
+{% extends "base.html" %}
+{% block title %}Battery — PiTail{% endblock %}
+
+{% block content %}
+<div class="page">
+  <div class="page-title"><span class="icon">◈</span> PiSugar Battery</div>
+
+  {% if not ps.available %}
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">PiSugar Server Not Running</span>
+    </div>
+    <div class="alert alert-warn" style="margin-bottom:16px;">
+      {{ ps.error or 'pisugar-server is not active.' }}
+    </div>
+    <p class="small" style="margin-bottom:16px; line-height:1.8;">
+      The PiSugar Power Manager daemon is not running. Install it or start the service.
+    </p>
+    <div class="form-group" style="margin-bottom:12px;">
+      <label>PiSugar Model</label>
+      <select id="pisugar-model" style="background:var(--bg);border:1px solid var(--border);
+              border-radius:6px;color:var(--text);font-family:var(--font);
+              font-size:13px;padding:8px 12px;width:100%;">
+        <option value="3">PiSugar 3 / PiSugar 3 Plus</option>
+        <option value="2">PiSugar 2 (2-LED, new model)</option>
+        <option value="4">PiSugar 2 (4-LED, old model)</option>
+        <option value="5">PiSugar 2 Pro / Plus</option>
+      </select>
+    </div>
+    <div class="btn-group">
+      <button type="button" class="btn btn-primary" onclick="installPiSugar()" id="install-btn">
+        Install PiSugar Power Manager
+      </button>
+      <button type="button" class="btn btn-ghost" onclick="startService()">
+        Start Service
+      </button>
+    </div>
+    <span id="install-msg" class="small" style="display:block;margin-top:10px;"></span>
+  </div>
+
+  {% else %}
+
+  <!-- Battery gauge + status -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">{{ ps.model }}</span>
+      <span id="charge-badge" class="small" style="color:
+        {% if ps.charge_state == 'charging' %}var(--accent2)
+        {% elif ps.charge_state == 'full' %}var(--accent)
+        {% else %}var(--muted){% endif %};">
+        {% if ps.charge_state == 'charging' %}⚡ Charging
+        {% elif ps.charge_state == 'full' %}✓ Full
+        {% else %}⬇ Discharging{% endif %}
+      </span>
+    </div>
+
+    <!-- Visual gauge -->
+    <div style="margin-bottom:20px;">
+      <div style="display:flex; justify-content:space-between; margin-bottom:6px;">
+        <span class="small">Battery Level</span>
+        <span id="pct-label" style="font-size:24px; font-weight:700; color:
+          {% if ps.battery_pct and ps.battery_pct > 50 %}var(--accent2)
+          {% elif ps.battery_pct and ps.battery_pct > 20 %}var(--warn)
+          {% else %}var(--danger){% endif %};">
+          {{ ps.battery_pct | round(1) if ps.battery_pct is not none else '—' }}%
+        </span>
+      </div>
+      <div style="background:var(--border); border-radius:6px; height:14px; overflow:hidden;">
+        <div id="pct-bar" style="height:100%; border-radius:6px; transition:width .5s;
+          width:{{ ps.battery_pct | round(0) | int if ps.battery_pct is not none else 0 }}%;
+          background:{% if ps.battery_pct and ps.battery_pct > 50 %}var(--accent2)
+                     {% elif ps.battery_pct and ps.battery_pct > 20 %}var(--warn)
+                     {% else %}var(--danger){% endif %};">
+        </div>
+      </div>
+    </div>
+
+    <div class="grid-2">
+      <div>
+        <div class="stat-row">
+          <span class="stat-label">Voltage</span>
+          <span class="stat-value" id="voltage">
+            {{ '%.2f V' | format(ps.battery_v) if ps.battery_v is not none else '—' }}
+          </span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">Power Plugged</span>
+          <span class="stat-value {{ 'green' if ps.plugged else '' }}" id="plugged">
+            {{ 'Yes' if ps.plugged else 'No' }}
+          </span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">Charging</span>
+          <span class="stat-value {{ 'green' if ps.charging else '' }}" id="charging">
+            {{ 'Yes' if ps.charging else 'No' }}
+          </span>
+        </div>
+      </div>
+      <div>
+        <div class="stat-row">
+          <span class="stat-label">Charging Allowed</span>
+          <span class="stat-value" id="allow-chg">
+            {{ 'Yes' if ps.allow_charging else 'No' }}
+          </span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">Charge Range</span>
+          <span class="stat-value" id="chg-range">
+            {% if ps.charge_low is not none and ps.charge_high is not none %}
+              {{ ps.charge_low | round(0) | int }}% – {{ ps.charge_high | round(0) | int }}%
+            {% else %}—{% endif %}
+          </span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">RTC Time</span>
+          <span class="stat-value small" id="rtc-time">{{ ps.rtc_time or '—' }}</span>
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-top:14px;">
+      <button type="button" class="btn btn-ghost btn-sm" onclick="refreshStatus()">
+        <span id="refresh-spin" class="spinner" style="display:none;"></span>
+        Refresh
+      </button>
+    </div>
+  </div>
+
+  <!-- Auto shutdown -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">Auto Shutdown</span>
+      <span class="small">Protect against deep discharge</span>
+    </div>
+    <p class="small" style="margin-bottom:16px; line-height:1.8;">
+      When battery drops below the threshold, PiSugar will initiate a clean shutdown
+      after the delay period.
+    </p>
+    <div class="grid-2">
+      <div class="form-group">
+        <label>Shutdown at (% battery)</label>
+        <input type="number" id="shutdown-level" min="0" max="30" step="1"
+               value="{{ ps.shutdown_level | round(0) | int if ps.shutdown_level is not none else 10 }}">
+      </div>
+      <div class="form-group">
+        <label>Delay before shutdown (seconds)</label>
+        <input type="number" id="shutdown-delay" min="0" max="300" step="10"
+               value="{{ ps.shutdown_delay | round(0) | int if ps.shutdown_delay is not none else 30 }}">
+      </div>
+    </div>
+    <button type="button" class="btn btn-warn" onclick="applyShutdown()">
+      Apply Shutdown Settings
+    </button>
+    <span id="shutdown-msg" class="small" style="margin-left:12px;"></span>
+  </div>
+
+  <!-- Charge protection -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">Charge Protection</span>
+      <span class="small">Extend battery lifespan</span>
+    </div>
+    <p class="small" style="margin-bottom:16px; line-height:1.8;">
+      Limiting charge to 80% significantly extends battery cycle life.
+      Set a range like <strong>20% – 80%</strong> for optimal longevity.
+    </p>
+    <div class="grid-2">
+      <div class="form-group">
+        <label>Resume charging at (%)</label>
+        <input type="number" id="chg-low" min="5" max="50" step="5"
+               value="{{ ps.charge_low | round(0) | int if ps.charge_low is not none else 20 }}">
+      </div>
+      <div class="form-group">
+        <label>Stop charging at (%)</label>
+        <input type="number" id="chg-high" min="50" max="100" step="5"
+               value="{{ ps.charge_high | round(0) | int if ps.charge_high is not none else 80 }}">
+      </div>
+    </div>
+    <button type="button" class="btn btn-ghost" onclick="applyChargeRange()">
+      Apply Charge Range
+    </button>
+    <span id="chg-range-msg" class="small" style="margin-left:12px;"></span>
+  </div>
+
+  <!-- RTC -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">Real-Time Clock</span>
+    </div>
+    <div class="stat-row" style="margin-bottom:12px;">
+      <span class="stat-label">Current RTC Time</span>
+      <span class="stat-value mono" id="rtc-display">{{ ps.rtc_time or '—' }}</span>
+    </div>
+    <div class="btn-group">
+      <button type="button" class="btn btn-primary" onclick="rtcSync('rtc_web')">
+        Sync from Internet
+      </button>
+      <button type="button" class="btn btn-ghost" onclick="rtcSync('rtc_pi2rtc')">
+        Pi → RTC
+      </button>
+      <button type="button" class="btn btn-ghost" onclick="rtcSync('rtc_rtc2pi')">
+        RTC → Pi
+      </button>
+    </div>
+    <span id="rtc-msg" class="small" style="margin-left:0; margin-top:8px; display:block;"></span>
+  </div>
+
+  <!-- Button config -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">Custom Button</span>
+      <span class="small">Map button presses to actions</span>
+    </div>
+    <div class="form-group">
+      <label>Single Press Action</label>
+      <select id="btn-single" style="background:var(--bg);border:1px solid var(--border);
+              border-radius:6px;color:var(--text);font-family:var(--font);
+              font-size:13px;padding:8px 12px;width:100%;">
+        <option value="">— disabled —</option>
+        <option value="sudo shutdown -h now">Shutdown</option>
+        <option value="sudo reboot">Reboot</option>
+        <option value="systemctl restart pitail">Restart PiTail</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Long Press Action</label>
+      <select id="btn-long" style="background:var(--bg);border:1px solid var(--border);
+              border-radius:6px;color:var(--text);font-family:var(--font);
+              font-size:13px;padding:8px 12px;width:100%;">
+        <option value="">— disabled —</option>
+        <option value="sudo shutdown -h now">Shutdown</option>
+        <option value="sudo reboot">Reboot</option>
+        <option value="systemctl restart pitail">Restart PiTail</option>
+      </select>
+    </div>
+    <button type="button" class="btn btn-ghost" onclick="applyButtons()">
+      Apply Button Mapping
+    </button>
+    <span id="btn-msg" class="small" style="margin-left:12px;"></span>
+  </div>
+
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function ps_cmd(command) {
+  return api('/api/pisugar/cmd', 'POST', {command});
+}
+
+async function refreshStatus() {
+  const spin = document.getElementById('refresh-spin');
+  spin.style.display = 'inline-block';
+  try {
+    const d = await api('/api/pisugar/status');
+    if (!d.available) { toast(d.error || 'Not available', 'err'); return; }
+    document.getElementById('pct-label').textContent = d.battery_pct != null
+      ? d.battery_pct.toFixed(1) + '%' : '—';
+    const pct = d.battery_pct || 0;
+    const bar = document.getElementById('pct-bar');
+    bar.style.width = pct + '%';
+    bar.style.background = pct > 50 ? 'var(--accent2)' : pct > 20 ? 'var(--warn)' : 'var(--danger)';
+    document.getElementById('voltage').textContent =
+      d.battery_v != null ? d.battery_v.toFixed(2) + ' V' : '—';
+    document.getElementById('plugged').textContent  = d.plugged  ? 'Yes' : 'No';
+    document.getElementById('charging').textContent = d.charging ? 'Yes' : 'No';
+    document.getElementById('allow-chg').textContent = d.allow_charging ? 'Yes' : 'No';
+    document.getElementById('rtc-time').textContent = d.rtc_time || '—';
+    document.getElementById('rtc-display').textContent = d.rtc_time || '—';
+    if (d.charge_low != null && d.charge_high != null) {
+      document.getElementById('chg-range').textContent =
+        Math.round(d.charge_low) + '% – ' + Math.round(d.charge_high) + '%';
+    }
+  } catch(e) { toast('Refresh failed', 'err'); }
+  spin.style.display = 'none';
+}
+
+async function applyShutdown() {
+  const level = document.getElementById('shutdown-level').value;
+  const delay = document.getElementById('shutdown-delay').value;
+  const msg   = document.getElementById('shutdown-msg');
+  msg.textContent = 'Applying…';
+  const r1 = await ps_cmd(`set_safe_shutdown_level ${level}`);
+  const r2 = await ps_cmd(`set_safe_shutdown_delay ${delay}`);
+  msg.textContent = (r1.ok && r2.ok) ? '✓ Saved' : 'Error saving';
+  msg.style.color = (r1.ok && r2.ok) ? 'var(--accent2)' : 'var(--danger)';
+}
+
+async function applyChargeRange() {
+  const low  = document.getElementById('chg-low').value;
+  const high = document.getElementById('chg-high').value;
+  const msg  = document.getElementById('chg-range-msg');
+  if (parseInt(low) >= parseInt(high)) {
+    toast('Low must be less than High', 'err'); return;
+  }
+  msg.textContent = 'Applying…';
+  const r = await ps_cmd(`set_battery_charging_range ${low} ${high}`);
+  msg.textContent = r.ok ? '✓ Saved' : 'Error saving';
+  msg.style.color = r.ok ? 'var(--accent2)' : 'var(--danger)';
+}
+
+async function rtcSync(cmd) {
+  const msg = document.getElementById('rtc-msg');
+  msg.textContent = 'Syncing…';
+  const r = await ps_cmd(cmd);
+  msg.textContent = r.ok ? '✓ ' + (r.response || 'Synced') : 'Error: ' + r.response;
+  msg.style.color = r.ok ? 'var(--accent2)' : 'var(--danger)';
+}
+
+async function applyButtons() {
+  const single = document.getElementById('btn-single').value;
+  const long   = document.getElementById('btn-long').value;
+  const msg    = document.getElementById('btn-msg');
+  msg.textContent = 'Applying…';
+  if (single) {
+    await ps_cmd(`set_button_enable single 1`);
+    await ps_cmd(`set_button_shell single ${single}`);
+  } else {
+    await ps_cmd(`set_button_enable single 0`);
+  }
+  if (long) {
+    await ps_cmd(`set_button_enable long 1`);
+    await ps_cmd(`set_button_shell long ${long}`);
+  } else {
+    await ps_cmd(`set_button_enable long 0`);
+  }
+  msg.textContent = '✓ Saved';
+  msg.style.color = 'var(--accent2)';
+}
+
+async function installPiSugar() {
+  const btn  = document.getElementById('install-btn');
+  const msg  = document.getElementById('install-msg');
+  const mdl  = document.getElementById('pisugar-model');
+  const model = mdl ? mdl.value : '3';
+  btn.disabled = true;
+  msg.style.color = 'var(--muted)';
+  msg.textContent = 'Starting install…';
+
+  const r = await api('/api/pisugar/install', 'POST', {model});
+  if (!r.ok) {
+    msg.textContent = r.msg;
+    msg.style.color = 'var(--danger)';
+    btn.disabled = false;
+    return;
+  }
+
+  // Poll for progress
+  const poll = setInterval(async () => {
+    try {
+      const s = await api('/api/pisugar/install/status');
+      msg.textContent = s.msg || 'Installing…';
+      if (s.done) {
+        clearInterval(poll);
+        msg.style.color = s.ok ? 'var(--accent2)' : 'var(--danger)';
+        if (s.ok) setTimeout(() => location.reload(), 2000);
+        else btn.disabled = false;
+      }
+    } catch(e) {}
+  }, 3000);
+}
+
+async function startService() {
+  const r = await fetch('/api/pisugar/install/status');
+  const d = await r.json();
+  if (d.running) { toast('Install already in progress…', 'info'); return; }
+  // Try starting service directly
+  const rc = await api('/api/pisugar/cmd', 'POST', {});
+  await fetch('/api/pisugar/install', {method:'POST',
+    headers:{'Content-Type':'application/json'}, body:JSON.stringify({model:'3'})});
+  toast('Attempting to start service…', 'info');
+  setTimeout(() => location.reload(), 5000);
+}
+
+// Auto-refresh every 30s
+setInterval(refreshStatus, 30000);
+</script>
+{% endblock %}

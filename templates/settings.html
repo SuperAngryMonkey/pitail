@@ -12,9 +12,7 @@
   <div class="grid-2">
     <!-- Change password -->
     <div class="card">
-      <div class="card-header">
-        <span class="card-title">Change Password</span>
-      </div>
+      <div class="card-header"><span class="card-title">Change Password</span></div>
       <form method="POST">
         <input type="hidden" name="action" value="change_password">
         <div class="form-group">
@@ -35,9 +33,7 @@
 
     <!-- Change username -->
     <div class="card">
-      <div class="card-header">
-        <span class="card-title">Login Username</span>
-      </div>
+      <div class="card-header"><span class="card-title">Login Username</span></div>
       <form method="POST">
         <input type="hidden" name="action" value="change_username">
         <div class="form-group">
@@ -54,9 +50,7 @@
 
     <!-- Hotspot settings -->
     <div class="card">
-      <div class="card-header">
-        <span class="card-title">Hotspot Name</span>
-      </div>
+      <div class="card-header"><span class="card-title">Hotspot Name</span></div>
       <form method="POST">
         <input type="hidden" name="action" value="change_hotspot">
         <div class="form-group">
@@ -69,29 +63,58 @@
 
     <!-- Power -->
     <div class="card">
-      <div class="card-header">
-        <span class="card-title">Power</span>
-      </div>
+      <div class="card-header"><span class="card-title">Power</span></div>
       <div class="btn-group" style="flex-direction:column; gap:10px;">
         <form method="POST">
           <input type="hidden" name="action" value="reboot">
           <button type="submit" class="btn btn-warn"
-                  onclick="return confirm('Reboot the device?')">
-            Reboot
-          </button>
+                  onclick="return confirm('Reboot the device?')">Reboot</button>
         </form>
         <form method="POST">
           <input type="hidden" name="action" value="shutdown">
           <button type="submit" class="btn btn-danger"
-                  onclick="return confirm('Shut down the device?')">
-            Shutdown
-          </button>
+                  onclick="return confirm('Shut down the device?')">Shutdown</button>
         </form>
       </div>
       <p class="small" style="margin-top:14px; color:var(--muted); line-height:1.6;">
         After shutdown you will need to power-cycle the Pi to bring it back.
       </p>
     </div>
+  </div>
+
+  <!-- Hardware integrations -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">Hardware Integrations</span>
+      <span class="small">Enable optional hardware support</span>
+    </div>
+
+    <form method="POST" id="pisugar-form">
+      <input type="hidden" name="action" value="toggle_pisugar">
+      <div class="toggle-row">
+        <div>
+          <div class="toggle-label">PiSugar Battery</div>
+          <div class="toggle-sub">
+            Enable battery management for PiSugar 3 / PiSugar 3 Plus.
+            Adds Battery page to navigation with charge level, RTC, auto-shutdown,
+            charge protection, and button mapping.
+          </div>
+        </div>
+        <label class="toggle" style="margin-left:20px; flex-shrink:0;">
+          <input type="checkbox" name="pisugar_enabled" value="1"
+                 {{ 'checked' if cfg.pisugar_enabled else '' }}
+                 onchange="this.form.submit()">
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+    </form>
+
+    {% if cfg.pisugar_enabled %}
+    <div class="alert alert-info" style="margin-top:12px; margin-bottom:0;">
+      PiSugar enabled — <a href="/battery" style="color:var(--accent);">go to Battery page</a>.
+      PiSugar Power Manager must be installed separately if not already present.
+    </div>
+    {% endif %}
   </div>
 
   <!-- USB OTG info -->
@@ -105,12 +128,10 @@
       USB cable to a computer, it appears as a network adapter with IP
       <strong>192.168.7.2</strong> — access this page at
       <a href="http://192.168.7.2:5000" style="color:var(--accent);">
-        http://192.168.7.2:5000
-      </a>.
+        http://192.168.7.2:5000</a>.
     </p>
     <p class="small" style="line-height:1.8;">
       No drivers needed on Windows 10+, macOS, or Linux.
-      If Windows asks for a driver, choose "USB Ethernet/RNDIS Gadget".
     </p>
   </div>
 </div>

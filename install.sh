@@ -150,10 +150,18 @@ pitail ALL=(ALL) NOPASSWD: /bin/systemctl start tailscaled
 pitail ALL=(ALL) NOPASSWD: /bin/systemctl stop tailscaled
 pitail ALL=(ALL) NOPASSWD: /usr/bin/tailscale
 pitail ALL=(ALL) NOPASSWD: /usr/bin/bash -c curl*
+pitail ALL=(ALL) NOPASSWD: /usr/bin/bash -c wget*
 pitail ALL=(ALL) NOPASSWD: /sbin/reboot
 pitail ALL=(ALL) NOPASSWD: /sbin/shutdown
 pitail ALL=(ALL) NOPASSWD: /usr/sbin/reboot
 pitail ALL=(ALL) NOPASSWD: /usr/sbin/shutdown
+pitail ALL=(ALL) NOPASSWD: /usr/bin/wget
+pitail ALL=(ALL) NOPASSWD: /bin/bash /tmp/pisugar-pm.sh *
+pitail ALL=(ALL) NOPASSWD: /usr/bin/bash /tmp/pisugar-pm.sh *
+pitail ALL=(ALL) NOPASSWD: /usr/bin/systemctl enable pisugar-server
+pitail ALL=(ALL) NOPASSWD: /usr/bin/systemctl start pisugar-server
+pitail ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop pisugar-server
+pitail ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart pisugar-server
 EOF
 chmod 440 /etc/sudoers.d/pitail
 success "sudoers configured"
@@ -318,6 +326,11 @@ if ! systemctl is-active --quiet avahi-daemon 2>/dev/null; then
 fi
 success "mDNS (avahi) active — device reachable as ${HOSTNAME_CURRENT}.local"
 
+# ── PiSugar note
+info "PiSugar integration is DISABLED by default."
+info "Enable it in Settings after install if you have a PiSugar 3."
+info "Ensure I2C is enabled: sudo raspi-config -> Interface Options -> I2C -> Yes"
+
 # ── Start services ────────────────────────────────────────────────────────────
 info "Starting PiTail services…"
 systemctl start pitail.service || warn "pitail.service failed to start (check logs)"
@@ -348,4 +361,6 @@ echo -e "    journalctl -u pitail-wifi-watch -f"
 echo ""
 echo -e "  ${YELLOW}NOTE: A reboot is required to activate USB OTG.${NC}"
 echo -e "  ${YELLOW}Run: sudo reboot${NC}"
+echo ""
+echo -e "  ${BOLD}PiSugar:${NC} Disabled by default. Enable in Settings page."
 echo ""

@@ -9,7 +9,7 @@
   </div>
 
   <div class="grid-2">
-    <!-- System card -->
+    <!-- System -->
     <div class="card">
       <div class="card-header">
         <span class="card-title">System</span>
@@ -26,34 +26,28 @@
       <div class="stat-row">
         <span class="stat-label">Memory</span>
         <span class="stat-value" id="sys-mem">
-          {% if sysinfo.mem %}
-            {{ sysinfo.mem.used }}M / {{ sysinfo.mem.total }}M
-            ({{ sysinfo.mem.pct }}%)
+          {% if sysinfo.mem %}{{ sysinfo.mem.used }}M / {{ sysinfo.mem.total }}M ({{ sysinfo.mem.pct }}%)
           {% else %}—{% endif %}
         </span>
       </div>
       <div class="stat-row">
         <span class="stat-label">IP(s)</span>
-        <span class="stat-value accent" id="sys-ips">
-          {{ sysinfo.ips | join(', ') or '—' }}
-        </span>
+        <span class="stat-value accent" id="sys-ips">{{ sysinfo.ips | join(', ') or '—' }}</span>
       </div>
     </div>
 
-    <!-- WiFi card -->
+    <!-- WiFi -->
     <div class="card">
       <div class="card-header">
         <span class="card-title">WiFi</span>
-        <span id="wifi-dot" class="dot {% if wifi.ssid %}green{% endif %}"></span>
+        <span id="wifi-dot" class="dot {{ 'green' if wifi.ssid else '' }}"></span>
       </div>
       {% if hotspot %}
-        <div class="alert alert-warn" style="margin-bottom:12px;">
-          Hotspot / Ad-hoc mode active
-        </div>
+        <div class="alert alert-warn" style="margin-bottom:12px;">Hotspot / Ad-hoc mode active</div>
       {% endif %}
       <div class="stat-row">
         <span class="stat-label">Mode</span>
-        <span class="stat-value" id="wifi-mode">{{ wifi.mode }}</span>
+        <span class="stat-value" id="wifi-mode">{{ 'Hotspot' if hotspot else wifi.mode }}</span>
       </div>
       <div class="stat-row">
         <span class="stat-label">SSID</span>
@@ -74,14 +68,13 @@
       </div>
     </div>
 
-    <!-- Tailscale card -->
+    <!-- Tailscale -->
     <div class="card">
       <div class="card-header">
         <span class="card-title">Tailscale</span>
         <span id="ts-dot" class="dot
           {% if ts.installed and ts.online %}blue
-          {% elif ts.installed %}yellow
-          {% endif %}"></span>
+          {% elif ts.installed %}yellow{% endif %}"></span>
       </div>
       {% if not ts.installed %}
         <div class="alert alert-warn">Not installed</div>
@@ -89,7 +82,7 @@
       {% else %}
         <div class="stat-row">
           <span class="stat-label">Status</span>
-          <span class="stat-value {% if ts.online %}accent{% else %}warn{% endif %}" id="ts-state">
+          <span class="stat-value {{ 'accent' if ts.online else 'warn' }}" id="ts-state">
             {{ ts.backend_state or 'Unknown' }}
           </span>
         </div>
@@ -113,32 +106,100 @@
       {% endif %}
     </div>
 
-    <!-- Quick actions card -->
-    <div class="card">
+    <!-- PiSugar battery card (only when enabled) -->
+    {% if pisugar %}
+    <div class="card" style="border-color:rgba(63,185,80,.2);">
       <div class="card-header">
-        <span class="card-title">Quick Actions</span>
+        <span class="card-title">Battery</span>
+        <span class="dot
+          {% if pisugar.available %}
+            {% if pisugar.charge_state == 'charging' %}green
+            {% elif pisugar.charge_state == 'full' %}blue
+            {% elif pisugar.battery_pct and pisugar.battery_pct < 20 %}red
+            {% else %}green{% endif %}
+          {% endif %}"></span>
       </div>
+      {% if not pisugar.available %}
+        <div class="alert alert-warn">{{ pisugar.error or 'PiSugar not available' }}</div>
+      {% else %}
+        <!-- Mini gauge -->
+        {% set pct = pisugar.battery_pct | round(0) | int if pisugar.battery_pct is not none else 0 %}
+        <div style="margin-bottom:14px;">
+          <div style="display:flex;justify-content:space-between;margin-bottom:5px;">
+            <span class="small">{{ pisugar.model }}</span>
+            <span style="font-size:18px;font-weight:700;color:
+              {% if pct > 50 %}var(--accent2){% elif pct > 20 %}var(--warn){% else %}var(--danger){% endif %};">
+              {{ pct }}%
+            </span>
+          </div>
+          <div style="background:var(--border);border-radius:4px;height:8px;overflow:hidden;">
+            <div style="width:{{ pct }}%;height:100%;border-radius:4px;background:
+              {% if pct > 50 %}var(--accent2){% elif pct > 20 %}var(--warn){% else %}var(--danger){% endif %};"></div>
+          </div>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">Voltage</span>
+          <span class="stat-value">
+            {% if pisugar.battery_v is not none %}{{ '%.2f' | format(pisugar.battery_v) }} V{% else %}—{% endif %}
+          </span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">Status</span>
+          <span class="stat-value {{ 'green' if pisugar.charging else '' }}">
+            {% if pisugar.charge_state == 'charging' %}⚡ Charging
+            {% elif pisugar.charge_state == 'full' %}✓ Full
+            {% else %}⬇ Discharging{% endif %}
+          </span>
+        </div>
+        <div style="margin-top:14px;">
+          <a href="/battery" class="btn btn-ghost btn-sm">Manage Battery →</a>
+        </div>
+      {% endif %}
+    </div>
+    {% else %}
+    <!-- Quick actions when no PiSugar -->
+    <div class="card">
+      <div class="card-header"><span class="card-title">Quick Actions</span></div>
       <div class="btn-group" style="flex-direction:column; gap:10px;">
         {% if not hotspot %}
           <button type="button" class="btn btn-warn" onclick="startHotspot()">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
-                 stroke="currentColor" stroke-width="2">
-              <path d="M5 12.55a11 11 0 0 1 14.08 0M1.42 9a16 16 0 0 1 21.16 0
-                       M8.53 16.11a6 6 0 0 1 6.95 0M12 20h.01"/>
-            </svg>
             Start Setup Hotspot
           </button>
         {% else %}
-          <button type="button" class="btn btn-ghost" onclick="stopHotspot()">
-            Stop Hotspot
-          </button>
+          <button type="button" class="btn btn-ghost" onclick="stopHotspot()">Stop Hotspot</button>
         {% endif %}
-        <button type="button" class="btn btn-ghost" onclick="if(confirm('Reboot?')) reboot()">
+        <button type="button" class="btn btn-ghost"
+                onclick="if(confirm('Reboot?')) fetch('/settings',{method:'POST',
+                headers:{'Content-Type':'application/x-www-form-urlencoded'},
+                body:'action=reboot'}).then(()=>toast('Rebooting…','info',8000))">
           Reboot Device
         </button>
       </div>
     </div>
+    {% endif %}
+
   </div>
+
+  <!-- Quick actions row when PiSugar IS shown (moves actions out of grid) -->
+  {% if pisugar %}
+  <div class="card">
+    <div class="card-header"><span class="card-title">Quick Actions</span></div>
+    <div class="btn-group">
+      {% if not hotspot %}
+        <button type="button" class="btn btn-warn" onclick="startHotspot()">Start Setup Hotspot</button>
+      {% else %}
+        <button type="button" class="btn btn-ghost" onclick="stopHotspot()">Stop Hotspot</button>
+      {% endif %}
+      <button type="button" class="btn btn-ghost"
+              onclick="if(confirm('Reboot?')) fetch('/settings',{method:'POST',
+              headers:{'Content-Type':'application/x-www-form-urlencoded'},
+              body:'action=reboot'}).then(()=>toast('Rebooting…','info',8000))">
+        Reboot
+      </button>
+    </div>
+  </div>
+  {% endif %}
+
 </div>
 {% endblock %}
 
@@ -154,26 +215,15 @@ async function stopHotspot() {
   toast(r.msg || (r.ok ? 'Hotspot stopped' : 'Failed'), r.ok ? 'ok' : 'err');
   if (r.ok) setTimeout(() => location.reload(), 2000);
 }
-async function reboot() {
-  await fetch('/settings', {
-    method: 'POST',
-    headers: {'Content-Type':'application/x-www-form-urlencoded'},
-    body: 'action=reboot'
-  });
-  toast('Rebooting…', 'info', 8000);
-}
 
-// Periodic refresh of system info
 async function refreshSysInfo() {
   try {
     const d = await api('/api/system/info');
     document.getElementById('sys-hostname').textContent = d.hostname || '—';
     document.getElementById('sys-uptime').textContent   = d.uptime   || '—';
     document.getElementById('sys-ips').textContent      = (d.ips||[]).join(', ') || '—';
-    if (d.mem) {
-      document.getElementById('sys-mem').textContent =
-        `${d.mem.used}M / ${d.mem.total}M (${d.mem.pct}%)`;
-    }
+    if (d.mem) document.getElementById('sys-mem').textContent =
+      `${d.mem.used}M / ${d.mem.total}M (${d.mem.pct}%)`;
     if (d.temp_c != null) {
       const b = document.getElementById('temp-badge');
       b.textContent = `${d.temp_c} °C`;
