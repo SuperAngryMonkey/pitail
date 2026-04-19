@@ -41,13 +41,31 @@ echo -e "${BOLD}${CYAN}╚══════════════════
 echo ""
 
 # ── Detect Pi Zero W2 ─────────────────────────────────────────────────────────
-if grep -q "Raspberry Pi Zero 2" /proc/cpuinfo 2>/dev/null ||
-   grep -q "BCM2710" /proc/cpuinfo 2>/dev/null; then
-  success "Detected Raspberry Pi Zero 2 W"
+# Detect board model from /proc/cpuinfo and device tree
+BOARD_MODEL=$(cat /proc/device-tree/model 2>/dev/null || cat /sys/firmware/devicetree/base/model 2>/dev/null || echo "")
+
+if echo "$BOARD_MODEL" | grep -qi "Zero 2"; then
+  success "Detected: $BOARD_MODEL"
   IS_ZERO2=true
+  HAS_OTG=true
+elif echo "$BOARD_MODEL" | grep -qi "Zero W"; then
+  success "Detected: $BOARD_MODEL (Pi Zero W — OTG capable but limited RAM)"
+  IS_ZERO2=true
+  HAS_OTG=true
+elif echo "$BOARD_MODEL" | grep -qi "Zero"; then
+  success "Detected: $BOARD_MODEL"
+  IS_ZERO2=true
+  HAS_OTG=true
 else
-  warn "Not detected as Pi Zero 2 W — continuing anyway"
+  # Standard Pi 3/4/5 or unknown
+  if [[ -n "$BOARD_MODEL" ]]; then
+    success "Detected: $BOARD_MODEL"
+  else
+    warn "Could not detect board model — assuming standard Pi"
+  fi
   IS_ZERO2=false
+  HAS_OTG=false
+  info "Standard Pi detected — skipping USB OTG gadget setup"
 fi
 
 # ── System update ─────────────────────────────────────────────────────────────
@@ -65,40 +83,38 @@ PACKAGES=(
 apt-get install -y -qq "${PACKAGES[@]}"
 success "System packages installed"
 
-# ── USB OTG gadget setup ──────────────────────────────────────────────────────
-info "Configuring USB OTG ethernet gadget…"
+# ── USB OTG gadget setup (Zero only) ──────────────────────────────────────────
+if $HAS_OTG; then
+  info "Configuring USB OTG ethernet gadget…"
 
-BOOT_CONFIG="/boot/firmware/config.txt"
-[[ -f /boot/config.txt && ! -f $BOOT_CONFIG ]] && BOOT_CONFIG="/boot/config.txt"
+  BOOT_CONFIG="/boot/firmware/config.txt"
+  [[ -f /boot/config.txt && ! -f $BOOT_CONFIG ]] && BOOT_CONFIG="/boot/config.txt"
 
-# Add dtoverlay=dwc2 if not present
-if ! grep -q "dtoverlay=dwc2" "$BOOT_CONFIG" 2>/dev/null; then
-  echo "dtoverlay=dwc2" >> "$BOOT_CONFIG"
-  info "Added dwc2 overlay to $BOOT_CONFIG"
-fi
-
-# Add modules-load for dwc2 and g_ether to cmdline.txt
-CMDLINE_FILE="/boot/firmware/cmdline.txt"
-[[ -f /boot/cmdline.txt && ! -f $CMDLINE_FILE ]] && CMDLINE_FILE="/boot/cmdline.txt"
-
-if [[ -f "$CMDLINE_FILE" ]]; then
-  CMDLINE=$(cat "$CMDLINE_FILE")
-  NEEDS_WRITE=false
-
-  if ! echo "$CMDLINE" | grep -q "modules-load=dwc2"; then
-    # Insert after rootwait or at end
-    CMDLINE="${CMDLINE} modules-load=dwc2,g_ether"
-    NEEDS_WRITE=true
+  # Add dtoverlay=dwc2 if not present
+  if ! grep -q "dtoverlay=dwc2" "$BOOT_CONFIG" 2>/dev/null; then
+    echo "dtoverlay=dwc2" >> "$BOOT_CONFIG"
+    info "Added dwc2 overlay to $BOOT_CONFIG"
   fi
 
-  if $NEEDS_WRITE; then
-    echo "$CMDLINE" > "$CMDLINE_FILE"
-    info "Updated $CMDLINE_FILE for USB OTG"
-  fi
-fi
+  # Add modules-load for dwc2 and g_ether to cmdline.txt
+  CMDLINE_FILE="/boot/firmware/cmdline.txt"
+  [[ -f /boot/cmdline.txt && ! -f $CMDLINE_FILE ]] && CMDLINE_FILE="/boot/cmdline.txt"
 
-# Create systemd-networkd config for usb0
-cat > /etc/systemd/network/usb0.network << 'EOF'
+  if [[ -f "$CMDLINE_FILE" ]]; then
+    CMDLINE=$(cat "$CMDLINE_FILE")
+    NEEDS_WRITE=false
+    if ! echo "$CMDLINE" | grep -q "modules-load=dwc2"; then
+      CMDLINE="${CMDLINE} modules-load=dwc2,g_ether"
+      NEEDS_WRITE=true
+    fi
+    if $NEEDS_WRITE; then
+      echo "$CMDLINE" > "$CMDLINE_FILE"
+      info "Updated $CMDLINE_FILE for USB OTG"
+    fi
+  fi
+
+  # Create systemd-networkd config for usb0
+  cat > /etc/systemd/network/usb0.network << 'EOF'
 [Match]
 Name=usb0
 
@@ -111,8 +127,11 @@ PoolOffset=10
 PoolSize=10
 EOF
 
-systemctl enable systemd-networkd 2>/dev/null || true
-success "USB OTG ethernet configured (${OTG_IP})"
+  systemctl enable systemd-networkd 2>/dev/null || true
+  success "USB OTG ethernet configured (${OTG_IP})"
+else
+  info "Skipping USB OTG setup (not a Pi Zero)"
+fi
 
 # ── Create service user ───────────────────────────────────────────────────────
 if ! id "$SERVICE_USER" &>/dev/null; then
@@ -126,6 +145,7 @@ mkdir -p "$INSTALL_DIR"
 
 # Copy app files
 cp "$SCRIPT_DIR/app.py"         "$INSTALL_DIR/"
+cp "$SCRIPT_DIR/display.py"     "$INSTALL_DIR/"
 cp -r "$SCRIPT_DIR/templates/"  "$INSTALL_DIR/"
 cp -r "$SCRIPT_DIR/static/"     "$INSTALL_DIR/" 2>/dev/null || mkdir -p "$INSTALL_DIR/static"
 
@@ -162,6 +182,10 @@ pitail ALL=(ALL) NOPASSWD: /usr/bin/systemctl enable pisugar-server
 pitail ALL=(ALL) NOPASSWD: /usr/bin/systemctl start pisugar-server
 pitail ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop pisugar-server
 pitail ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart pisugar-server
+pitail ALL=(ALL) NOPASSWD: /usr/bin/systemctl start pitail-display
+pitail ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop pitail-display
+pitail ALL=(ALL) NOPASSWD: /usr/bin/systemctl enable pitail-display
+pitail ALL=(ALL) NOPASSWD: /usr/bin/systemctl disable pitail-display
 EOF
 chmod 440 /etc/sudoers.d/pitail
 success "sudoers configured"
@@ -349,7 +373,9 @@ if [[ -n "$IP_ADDR" ]]; then
 echo -e "    WiFi:     ${CYAN}http://${IP_ADDR}:${APP_PORT}${NC}"
 fi
 echo -e "    mDNS:     ${CYAN}http://$(hostname).local:${APP_PORT}${NC}"
+if $HAS_OTG; then
 echo -e "    USB OTG:  ${CYAN}http://${OTG_IP}:${APP_PORT}${NC}  (USB cable to PC)"
+fi
 echo -e "    Hotspot:  ${CYAN}http://${HOTSPOT_IP}:${APP_PORT}${NC}  (if no WiFi → auto-starts)"
 echo ""
 echo -e "  ${BOLD}Default login:${NC} admin / pitail"
@@ -359,8 +385,9 @@ echo -e "  ${BOLD}Logs:${NC}"
 echo -e "    journalctl -u pitail -f"
 echo -e "    journalctl -u pitail-wifi-watch -f"
 echo ""
-echo -e "  ${YELLOW}NOTE: A reboot is required to activate USB OTG.${NC}"
+echo -e "  ${YELLOW}NOTE: A reboot is recommended to finalize setup.${NC}"
 echo -e "  ${YELLOW}Run: sudo reboot${NC}"
 echo ""
-echo -e "  ${BOLD}PiSugar:${NC} Disabled by default. Enable in Settings page."
+echo -e "  ${BOLD}PiSugar:${NC}  Disabled by default. Enable in Settings page."
+echo -e "  ${BOLD}E-Paper:${NC}  Disabled by default. Enable SPI first, then toggle in Settings."
 echo ""

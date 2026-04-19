@@ -374,6 +374,7 @@ def inject_globals():
     cfg = load_config()
     return {
         "pisugar_enabled": cfg.get("pisugar_enabled", False),
+        "epaper_enabled": cfg.get("epaper_enabled", False),
         "cfg": cfg,
     }
 
@@ -685,6 +686,19 @@ def settings_page():
                 save_config(cfg)
                 msg = ("success", "Hotspot SSID updated.")
 
+        elif action == "toggle_epaper":
+            enabled = request.form.get("epaper_enabled") == "1"
+            cfg["epaper_enabled"] = enabled
+            save_config(cfg)
+            state = "enabled" if enabled else "disabled"
+            msg = ("success", f"E-paper display {state}.")
+            if enabled:
+                run(["sudo", "systemctl", "enable", "pitail-display"])
+                run(["sudo", "systemctl", "start",  "pitail-display"])
+            else:
+                run(["sudo", "systemctl", "stop",    "pitail-display"])
+                run(["sudo", "systemctl", "disable", "pitail-display"])
+
         elif action == "toggle_pisugar":
             enabled = request.form.get("pisugar_enabled") == "1"
             cfg["pisugar_enabled"] = enabled
@@ -710,6 +724,46 @@ def settings_page():
 def api_sysinfo():
     return jsonify(get_system_info())
 
+
+# ─── Routes: E-Paper ─────────────────────────────────────────────────────────
+
+@app.route("/api/epaper/install", methods=["POST"])
+@login_required
+def api_epaper_install():
+    """Install Waveshare EPD library, Pillow, and qrcode in background."""
+    def do_install():
+        run(["sudo", "apt-get", "install", "-y", "-qq",
+             "python3-pil", "python3-numpy", "fonts-dejavu"], timeout=120)
+        run([f"{INSTALL_DIR}/venv/bin/pip", "install", "--quiet",
+             "waveshare-epd", "qrcode[pil]", "pillow"], timeout=180)
+    threading.Thread(target=do_install, daemon=True).start()
+    return jsonify({"ok": True, "msg": "Installing display libraries… refresh in ~2 minutes"})
+
+
+@app.route("/api/epaper/preview")
+@login_required
+def api_epaper_preview():
+    """Return current display screen info as JSON (for web preview)."""
+    cfg = load_config()
+    if not cfg.get("epaper_enabled"):
+        return jsonify({"enabled": False})
+    # Return data that would be shown on screen
+    _, wifi_ip, sig = get_wifi_status().values() if False else (None, None, None)
+    wifi = get_wifi_status()
+    ts   = get_tailscale_status()
+    info = get_system_info()
+    return jsonify({
+        "enabled": True,
+        "wifi_ssid": wifi.get("ssid", "—"),
+        "wifi_ip":   wifi.get("ip", "—"),
+        "ts_state":  ts.get("backend_state", "—"),
+        "ts_ip":     ts.get("ts_ip", "—"),
+        "hostname":  info.get("hostname", "—"),
+        "temp_c":    info.get("temp_c"),
+    })
+
+
+INSTALL_DIR = "/opt/pitail"
 
 # ─── Entry point ──────────────────────────────────────────────────────────────
 

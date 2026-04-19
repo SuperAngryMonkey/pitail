@@ -115,6 +115,36 @@
       PiSugar Power Manager must be installed separately if not already present.
     </div>
     {% endif %}
+
+    <form method="POST" id="epaper-form" style="margin-top:8px;">
+      <input type="hidden" name="action" value="toggle_epaper">
+      <div class="toggle-row">
+        <div>
+          <div class="toggle-label">E-Paper Display</div>
+          <div class="toggle-sub">
+            Enable Waveshare 2.13" V3 e-paper HAT. Rotates through network info,
+            QR code (auto-switches to hotspot QR when in hotspot mode), and system
+            stats every 60 seconds. Requires headers soldered and SPI enabled.
+          </div>
+        </div>
+        <label class="toggle" style="margin-left:20px; flex-shrink:0;">
+          <input type="checkbox" name="epaper_enabled" value="1"
+                 {{ 'checked' if cfg.epaper_enabled else '' }}
+                 onchange="this.form.submit()">
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+    </form>
+
+    {% if cfg.epaper_enabled %}
+    <div class="alert alert-info" style="margin-top:12px; margin-bottom:0;">
+      E-paper enabled. Make sure SPI is enabled (<code>sudo raspi-config → Interface Options → SPI</code>)
+      and display libraries are installed.
+      <button type="button" class="btn btn-ghost btn-sm" style="margin-left:10px;"
+              onclick="installEpaper()">Install Libraries</button>
+      <span id="epaper-install-msg" class="small" style="margin-left:8px;"></span>
+    </div>
+    {% endif %}
   </div>
 
   <!-- USB OTG info -->
@@ -135,4 +165,16 @@
     </p>
   </div>
 </div>
+{% block scripts %}
+<script>
+async function installEpaper() {
+  const msg = document.getElementById('epaper-install-msg');
+  msg.textContent = 'Installing… ~2 minutes';
+  msg.style.color = 'var(--muted)';
+  const r = await api('/api/epaper/install', 'POST', {});
+  msg.textContent = r.msg;
+  msg.style.color = r.ok ? 'var(--accent2)' : 'var(--danger)';
+}
+</script>
+{% endblock %}
 {% endblock %}
