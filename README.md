@@ -161,6 +161,7 @@ https://modclouddownloadprod.blob.core.windows.net/shared/mod-rndis-driver-windo
 ## Changelog
 
 ### v2.4
+- **USB OTG fixed** — installer now sets `dtoverlay=dwc2,dr_mode=peripheral` and strips the stock image's conflicting host-mode lines (the real reason USB gadget mode wouldn't enumerate on the Pi Zero 2 W). Added `fix_usb.sh` for existing installs.
 - **Hotspot rewritten using hostapd + dnsmasq** — NetworkManager's hotspot does not reliably enter AP mode on the Pi Zero 2 W (brcmfmac chip); hostapd talks to the driver directly and works
 - Watchdog now hands wlan0 between NetworkManager (client) and hostapd (AP) cleanly
 - Manual hotspot start/stop in the web UI uses the same hostapd path

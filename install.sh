@@ -98,10 +98,19 @@ if $HAS_OTG; then
   BOOT_CONFIG="/boot/firmware/config.txt"
   [[ -f /boot/config.txt && ! -f $BOOT_CONFIG ]] && BOOT_CONFIG="/boot/config.txt"
 
-  # Add dtoverlay=dwc2 if not present
-  if ! grep -q "dtoverlay=dwc2" "$BOOT_CONFIG" 2>/dev/null; then
-    echo "dtoverlay=dwc2" >> "$BOOT_CONFIG"
-    info "Added dwc2 overlay to $BOOT_CONFIG"
+  # CRITICAL: the stock Bookworm image ships dwc2 in host mode under board
+  # sections (e.g. [cm5] dtoverlay=dwc2, and [cm4] otg_mode=1). Those force
+  # the port into HOST mode and prevent the USB gadget from enumerating.
+  # Remove any existing dwc2/otg lines, then add peripheral mode under [all].
+  if [[ -f "$BOOT_CONFIG" ]]; then
+    # Strip conflicting lines (dr_mode=host, plain dwc2, otg_mode)
+    sed -i '/dtoverlay=dwc2/d' "$BOOT_CONFIG"
+    sed -i '/^otg_mode=1/d' "$BOOT_CONFIG"
+    # Append the correct peripheral-mode overlay under a fresh [all] section
+    if ! grep -q "dtoverlay=dwc2,dr_mode=peripheral" "$BOOT_CONFIG"; then
+      printf '\n[all]\ndtoverlay=dwc2,dr_mode=peripheral\n' >> "$BOOT_CONFIG"
+      info "Set dwc2 to peripheral mode in $BOOT_CONFIG"
+    fi
   fi
 
   # Add modules-load for dwc2 and g_ether to cmdline.txt
@@ -289,20 +298,37 @@ start_hotspot() {
   /usr/sbin/ip addr flush dev wlan0 2>/dev/null || true
   /usr/sbin/ip link set wlan0 up 2>/dev/null || true
   /usr/sbin/ip addr add \${AP_IP}/24 dev wlan0 2>/dev/null || true
-  # Start dnsmasq + hostapd
-  /usr/bin/systemctl start dnsmasq 2>/dev/null || true
+  # Start hostapd, then dnsmasq DIRECTLY with explicit DHCP range
+  /usr/bin/pkill hostapd 2>/dev/null || true
+  sleep 1
   /usr/sbin/hostapd -B /etc/hostapd/pitail-hotspot.conf 2>/dev/null || true
+  sleep 2
+  /usr/bin/pkill -f "dnsmasq.*wlan0" 2>/dev/null || true
+  /usr/sbin/dnsmasq --interface=wlan0 --bind-interfaces --except-interface=lo \
+    --dhcp-range=192.168.50.10,192.168.50.100,255.255.255.0,24h \
+    --dhcp-option=3,\${AP_IP} --dhcp-option=6,\${AP_IP} \
+    --pid-file=/run/pitail-dnsmasq.pid 2>/dev/null || true
   HOTSPOT_ACTIVE=true
   log "Hotspot up: SSID=\$HOTSPOT_SSID IP=\$AP_IP"
 }
 
 stop_hotspot() {
   log "Stopping hotspot, returning wlan0 to NetworkManager"
+  if [[ -f /run/pitail-dnsmasq.pid ]]; then
+    /usr/bin/kill "\$(cat /run/pitail-dnsmasq.pid)" 2>/dev/null || true
+    /usr/bin/rm -f /run/pitail-dnsmasq.pid
+  fi
+  /usr/bin/pkill -f "dnsmasq.*wlan0" 2>/dev/null || true
   /usr/bin/pkill hostapd 2>/dev/null || true
-  /usr/bin/systemctl stop dnsmasq 2>/dev/null || true
   /usr/sbin/ip addr flush dev wlan0 2>/dev/null || true
+  /usr/sbin/ip link set wlan0 down 2>/dev/null || true
+  sleep 1
+  /usr/sbin/ip link set wlan0 up 2>/dev/null || true
   /usr/bin/nmcli device set wlan0 managed yes 2>/dev/null || true
-  sleep 3
+  sleep 2
+  /usr/bin/systemctl restart NetworkManager 2>/dev/null || true
+  sleep 5
+  /usr/bin/nmcli device connect wlan0 2>/dev/null || true
   HOTSPOT_ACTIVE=false
 }
 

@@ -52,6 +52,7 @@ set -uo pipefail
 ACTION="${1:-status}"
 AP_IP="192.168.50.1"
 HOSTAPD_CONF="/etc/hostapd/pitail-hotspot.conf"
+DNSMASQ_PID="/run/pitail-dnsmasq.pid"
 start_hotspot() {
   nmcli device set wlan0 managed no 2>/dev/null || true
   nmcli radio wifi on 2>/dev/null || true
@@ -59,19 +60,33 @@ start_hotspot() {
   ip addr flush dev wlan0 2>/dev/null || true
   ip link set wlan0 up 2>/dev/null || true
   ip addr add "${AP_IP}/24" dev wlan0 2>/dev/null || true
-  systemctl start dnsmasq 2>/dev/null || true
   pkill hostapd 2>/dev/null || true
   sleep 1
   hostapd -B "$HOSTAPD_CONF" 2>/dev/null || true
+  sleep 2
+  if [[ -f "$DNSMASQ_PID" ]]; then kill "$(cat "$DNSMASQ_PID")" 2>/dev/null || true; rm -f "$DNSMASQ_PID"; fi
+  pkill -f "dnsmasq.*wlan0" 2>/dev/null || true
+  dnsmasq --interface=wlan0 --bind-interfaces --except-interface=lo \
+    --dhcp-range=192.168.50.10,192.168.50.100,255.255.255.0,24h \
+    --dhcp-option=3,${AP_IP} --dhcp-option=6,${AP_IP} \
+    --pid-file=${DNSMASQ_PID} 2>/dev/null || true
   sleep 1
   if pgrep hostapd >/dev/null; then echo "hotspot started"; exit 0
   else echo "hotspot failed to start"; exit 1; fi
 }
 stop_hotspot() {
+  if [[ -f "$DNSMASQ_PID" ]]; then kill "$(cat "$DNSMASQ_PID")" 2>/dev/null || true; rm -f "$DNSMASQ_PID"; fi
+  pkill -f "dnsmasq.*wlan0" 2>/dev/null || true
   pkill hostapd 2>/dev/null || true
-  systemctl stop dnsmasq 2>/dev/null || true
   ip addr flush dev wlan0 2>/dev/null || true
+  ip link set wlan0 down 2>/dev/null || true
+  sleep 1
+  ip link set wlan0 up 2>/dev/null || true
   nmcli device set wlan0 managed yes 2>/dev/null || true
+  sleep 2
+  systemctl restart NetworkManager 2>/dev/null || true
+  sleep 5
+  nmcli device connect wlan0 2>/dev/null || true
   echo "hotspot stopped"; exit 0
 }
 status_hotspot() {
@@ -91,7 +106,6 @@ echo "[*] Writing new hostapd-based watchdog..."
 cat > /usr/local/bin/pitail-wifi-watch << WIFIWATCH
 #!/usr/bin/env bash
 HOTSPOT_SSID="${ADHOC_SSID}"
-HOTSPOT_PASS="${ADHOC_PASS}"
 AP_IP="192.168.50.1"
 CHECK_INTERVAL=30
 FAIL_COUNT=0
@@ -99,8 +113,7 @@ MAX_FAILS=4
 HOTSPOT_ACTIVE=false
 log() { logger -t pitail-wifi-watch "\$*"; }
 is_wifi_connected() {
-  nmcli -t -f DEVICE,TYPE,STATE device 2>/dev/null |
-    grep "^wlan0:wifi:connected" &>/dev/null
+  nmcli -t -f DEVICE,TYPE,STATE device 2>/dev/null | grep "^wlan0:wifi:connected" &>/dev/null
 }
 start_hotspot() {
   log "No WiFi after \${MAX_FAILS} checks — starting hostapd hotspot"
@@ -110,18 +123,32 @@ start_hotspot() {
   /usr/sbin/ip addr flush dev wlan0 2>/dev/null || true
   /usr/sbin/ip link set wlan0 up 2>/dev/null || true
   /usr/sbin/ip addr add \${AP_IP}/24 dev wlan0 2>/dev/null || true
-  /usr/bin/systemctl start dnsmasq 2>/dev/null || true
+  /usr/bin/pkill hostapd 2>/dev/null || true
+  sleep 1
   /usr/sbin/hostapd -B /etc/hostapd/pitail-hotspot.conf 2>/dev/null || true
+  sleep 2
+  /usr/bin/pkill -f "dnsmasq.*wlan0" 2>/dev/null || true
+  /usr/sbin/dnsmasq --interface=wlan0 --bind-interfaces --except-interface=lo \
+    --dhcp-range=192.168.50.10,192.168.50.100,255.255.255.0,24h \
+    --dhcp-option=3,\${AP_IP} --dhcp-option=6,\${AP_IP} \
+    --pid-file=/run/pitail-dnsmasq.pid 2>/dev/null || true
   HOTSPOT_ACTIVE=true
   log "Hotspot up: SSID=\$HOTSPOT_SSID IP=\$AP_IP"
 }
 stop_hotspot() {
   log "Stopping hotspot, returning wlan0 to NetworkManager"
+  if [[ -f /run/pitail-dnsmasq.pid ]]; then /usr/bin/kill "\$(cat /run/pitail-dnsmasq.pid)" 2>/dev/null || true; /usr/bin/rm -f /run/pitail-dnsmasq.pid; fi
+  /usr/bin/pkill -f "dnsmasq.*wlan0" 2>/dev/null || true
   /usr/bin/pkill hostapd 2>/dev/null || true
-  /usr/bin/systemctl stop dnsmasq 2>/dev/null || true
   /usr/sbin/ip addr flush dev wlan0 2>/dev/null || true
+  /usr/sbin/ip link set wlan0 down 2>/dev/null || true
+  sleep 1
+  /usr/sbin/ip link set wlan0 up 2>/dev/null || true
   /usr/bin/nmcli device set wlan0 managed yes 2>/dev/null || true
-  sleep 3
+  sleep 2
+  /usr/bin/systemctl restart NetworkManager 2>/dev/null || true
+  sleep 5
+  /usr/bin/nmcli device connect wlan0 2>/dev/null || true
   HOTSPOT_ACTIVE=false
 }
 sleep 25
