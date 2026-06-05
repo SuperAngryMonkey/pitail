@@ -77,11 +77,19 @@ info "Installing system dependencies…"
 PACKAGES=(
   python3 python3-pip python3-venv
   network-manager wireless-tools iw
-  dnsmasq
+  hostapd dnsmasq
   sudo curl
 )
 apt-get install -y -qq "${PACKAGES[@]}"
 success "System packages installed"
+
+# hostapd ships masked by default — unmask so the watchdog can start it.
+# Disable auto-start of both; the watchdog controls them on demand.
+systemctl unmask hostapd 2>/dev/null || true
+systemctl disable hostapd 2>/dev/null || true
+systemctl disable dnsmasq 2>/dev/null || true
+systemctl stop hostapd 2>/dev/null || true
+systemctl stop dnsmasq 2>/dev/null || true
 
 # ── USB OTG gadget setup (Zero only) ──────────────────────────────────────────
 if $HAS_OTG; then
@@ -146,6 +154,8 @@ mkdir -p "$INSTALL_DIR"
 # Copy app files
 cp "$SCRIPT_DIR/app.py"         "$INSTALL_DIR/"
 cp "$SCRIPT_DIR/display.py"     "$INSTALL_DIR/"
+cp -r "$SCRIPT_DIR/scripts/"    "$INSTALL_DIR/"
+chmod +x "$INSTALL_DIR/scripts/"*.sh
 cp -r "$SCRIPT_DIR/templates/"  "$INSTALL_DIR/"
 cp -r "$SCRIPT_DIR/static/"     "$INSTALL_DIR/" 2>/dev/null || mkdir -p "$INSTALL_DIR/static"
 
@@ -186,6 +196,18 @@ pitail ALL=(ALL) NOPASSWD: /usr/bin/systemctl start pitail-display
 pitail ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop pitail-display
 pitail ALL=(ALL) NOPASSWD: /usr/bin/systemctl enable pitail-display
 pitail ALL=(ALL) NOPASSWD: /usr/bin/systemctl disable pitail-display
+pitail ALL=(ALL) NOPASSWD: /usr/bin/bash /opt/pitail/scripts/install_pisugar.sh *
+pitail ALL=(ALL) NOPASSWD: /bin/bash /opt/pitail/scripts/install_pisugar.sh *
+pitail ALL=(ALL) NOPASSWD: /usr/bin/bash /opt/pitail/scripts/install_epaper.sh
+pitail ALL=(ALL) NOPASSWD: /bin/bash /opt/pitail/scripts/install_epaper.sh
+pitail ALL=(ALL) NOPASSWD: /usr/bin/bash /opt/pitail/scripts/hotspot.sh *
+pitail ALL=(ALL) NOPASSWD: /bin/bash /opt/pitail/scripts/hotspot.sh *
+pitail ALL=(ALL) NOPASSWD: /usr/sbin/hostapd *
+pitail ALL=(ALL) NOPASSWD: /usr/bin/pkill hostapd
+pitail ALL=(ALL) NOPASSWD: /usr/bin/systemctl start dnsmasq
+pitail ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop dnsmasq
+pitail ALL=(ALL) NOPASSWD: /usr/sbin/ip *
+pitail ALL=(ALL) NOPASSWD: /usr/bin/nmcli *
 EOF
 chmod 440 /etc/sudoers.d/pitail
 success "sudoers configured"
@@ -210,62 +232,97 @@ fi
 # ── WiFi fallback daemon ──────────────────────────────────────────────────────
 info "Installing WiFi fallback daemon…"
 
+# ── hostapd config (AP mode for Pi Zero 2 W brcmfmac) ──
+cat > /etc/hostapd/pitail-hotspot.conf << HOSTAPDCONF
+interface=wlan0
+driver=nl80211
+ssid=${ADHOC_SSID}
+hw_mode=g
+channel=6
+wmm_enabled=0
+macaddr_acl=0
+auth_algs=1
+ignore_broadcast_ssid=0
+wpa=2
+wpa_passphrase=${ADHOC_PASS}
+wpa_key_mgmt=WPA-PSK
+rsn_pairwise=CCMP
+HOSTAPDCONF
+
+# ── dnsmasq config for the hotspot subnet ──
+cat > /etc/dnsmasq.d/pitail-hotspot.conf << 'DNSMASQCONF'
+interface=wlan0
+bind-interfaces
+dhcp-range=192.168.50.10,192.168.50.100,255.255.255.0,24h
+dhcp-option=3,192.168.50.1
+dhcp-option=6,192.168.50.1
+address=/#/192.168.50.1
+DNSMASQCONF
+
 cat > /usr/local/bin/pitail-wifi-watch << WIFIWATCH
 #!/usr/bin/env bash
-# PiTail WiFi watchdog — starts hotspot if no WiFi after boot
+# PiTail WiFi watchdog — starts a hostapd hotspot if no WiFi after boot.
+# Uses hostapd + dnsmasq directly (NetworkManager hotspot is unreliable on
+# the Pi Zero 2 W brcmfmac chip).
 HOTSPOT_SSID="${ADHOC_SSID}"
 HOTSPOT_PASS="${ADHOC_PASS}"
+AP_IP="192.168.50.1"
 CHECK_INTERVAL=30
 FAIL_COUNT=0
-MAX_FAILS=4   # 2 minutes with no WiFi before enabling hotspot
+MAX_FAILS=4   # ~2 minutes with no WiFi before enabling hotspot
 HOTSPOT_ACTIVE=false
 
 log() { logger -t pitail-wifi-watch "\$*"; }
 
 is_wifi_connected() {
-  nmcli -t -f DEVICE,TYPE,STATE device |
+  nmcli -t -f DEVICE,TYPE,STATE device 2>/dev/null |
     grep "^wlan0:wifi:connected" &>/dev/null
 }
 
-is_hotspot_active() {
-  nmcli -t -f NAME,TYPE,ACTIVE connection show --active 2>/dev/null |
-    grep -q "pitail-hotspot"
-}
-
 start_hotspot() {
-  log "No WiFi detected after \${MAX_FAILS} checks — starting hotspot"
-  nmcli connection delete pitail-hotspot 2>/dev/null || true
-  nmcli device wifi hotspot ifname wlan0 con-name pitail-hotspot \
-    ssid "\$HOTSPOT_SSID" password "\$HOTSPOT_PASS" || true
+  log "No WiFi after \${MAX_FAILS} checks — starting hostapd hotspot"
+  # Take wlan0 away from NetworkManager so hostapd can own it
+  /usr/bin/nmcli device set wlan0 managed no 2>/dev/null || true
+  /usr/bin/nmcli radio wifi on 2>/dev/null || true
+  sleep 2
+  # Bring interface up with static AP IP
+  /usr/sbin/ip addr flush dev wlan0 2>/dev/null || true
+  /usr/sbin/ip link set wlan0 up 2>/dev/null || true
+  /usr/sbin/ip addr add \${AP_IP}/24 dev wlan0 2>/dev/null || true
+  # Start dnsmasq + hostapd
+  /usr/bin/systemctl start dnsmasq 2>/dev/null || true
+  /usr/sbin/hostapd -B /etc/hostapd/pitail-hotspot.conf 2>/dev/null || true
   HOTSPOT_ACTIVE=true
-  log "Hotspot started: SSID=\$HOTSPOT_SSID pass=\$HOTSPOT_PASS"
+  log "Hotspot up: SSID=\$HOTSPOT_SSID IP=\$AP_IP"
 }
 
 stop_hotspot() {
-  log "WiFi connected — stopping hotspot"
-  nmcli connection down pitail-hotspot 2>/dev/null || true
+  log "Stopping hotspot, returning wlan0 to NetworkManager"
+  /usr/bin/pkill hostapd 2>/dev/null || true
+  /usr/bin/systemctl stop dnsmasq 2>/dev/null || true
+  /usr/sbin/ip addr flush dev wlan0 2>/dev/null || true
+  /usr/bin/nmcli device set wlan0 managed yes 2>/dev/null || true
+  sleep 3
   HOTSPOT_ACTIVE=false
 }
 
 # Give NetworkManager time to connect on boot
-sleep 20
+sleep 25
 
 while true; do
   if is_wifi_connected; then
     FAIL_COUNT=0
-    if \$HOTSPOT_ACTIVE && is_hotspot_active; then
+    if \$HOTSPOT_ACTIVE; then
       stop_hotspot
     fi
   else
-    if ! is_hotspot_active; then
+    if ! \$HOTSPOT_ACTIVE; then
       FAIL_COUNT=\$((FAIL_COUNT+1))
       log "No WiFi: fail \$FAIL_COUNT/\$MAX_FAILS"
       if [[ \$FAIL_COUNT -ge \$MAX_FAILS ]]; then
         start_hotspot
         FAIL_COUNT=0
       fi
-    else
-      HOTSPOT_ACTIVE=true
     fi
   fi
   sleep \$CHECK_INTERVAL

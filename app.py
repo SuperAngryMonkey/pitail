@@ -193,29 +193,24 @@ def list_saved_wifi():
 
 # ─── Hotspot helpers ──────────────────────────────────────────────────────────
 
+HOTSPOT_SCRIPT = os.path.join(os.path.dirname(__file__), "scripts", "hotspot.sh")
+
+
 def get_adhoc_status():
-    _, out, _ = run(["nmcli", "-t", "-f", "NAME,TYPE,ACTIVE",
-                     "connection", "show", "--active"])
-    for line in out.splitlines() if out else []:
-        if "hotspot" in line.lower() or "adhoc" in line.lower() or "ap" in line.lower():
-            return True
-    _, iw_out, _ = run(["iw", "dev", "wlan0", "info"])
-    if iw_out and "type AP" in iw_out:
-        return True
-    return False
+    """Hotspot is active when the hostapd process is running."""
+    rc, out, _ = run(["sudo", "bash", HOTSPOT_SCRIPT, "status"], timeout=10)
+    return out.strip() == "active"
 
 
 def start_hotspot(ssid="PiTail-Setup", password="pitail123"):
-    run(["sudo", "nmcli", "connection", "delete", "pitail-hotspot"], timeout=10)
-    rc, out, err = run(["sudo", "nmcli", "device", "wifi", "hotspot",
-                        "ifname", "wlan0", "con-name", "pitail-hotspot",
-                        "ssid", ssid, "password", password], timeout=20)
+    # SSID/password come from the hostapd config written at install time.
+    # (ssid/password args kept for API compatibility but config file is source of truth.)
+    rc, out, err = run(["sudo", "bash", HOTSPOT_SCRIPT, "start"], timeout=30)
     return rc == 0, out or err
 
 
 def stop_hotspot():
-    rc, out, err = run(["sudo", "nmcli", "connection", "down", "pitail-hotspot"], timeout=10)
-    run(["sudo", "nmcli", "device", "disconnect", "wlan0"], timeout=10)
+    rc, out, err = run(["sudo", "bash", HOTSPOT_SCRIPT, "stop"], timeout=20)
     return rc == 0, out or err
 
 
@@ -571,55 +566,58 @@ def api_pisugar_status():
     return jsonify({"enabled": True, **get_pisugar_status()})
 
 
-# Track pisugar install state
-_pisugar_install_state = {"running": False, "done": False, "ok": False, "msg": ""}
+# Shared install state tracker
+_install_states = {
+    "pisugar": {"running": False, "done": False, "ok": False, "msg": ""},
+    "epaper":  {"running": False, "done": False, "ok": False, "msg": ""},
+}
+
+SCRIPTS_DIR = os.path.join(os.path.dirname(__file__), "scripts")
+
+
+def run_install_script(key, script, args=None):
+    """Run an install script as root via sudo, tracking state."""
+    global _install_states
+    if _install_states[key]["running"]:
+        return
+    _install_states[key] = {"running": True, "done": False, "ok": False, "msg": "Installing…"}
+    cmd = ["sudo", "bash", script] + (args or [])
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, text=True)
+        last_line = ""
+        for line in proc.stdout:
+            line = line.strip()
+            if line:
+                last_line = line
+                _install_states[key]["msg"] = line[-80:]
+        proc.wait(timeout=600)
+        ok = proc.returncode == 0
+        _install_states[key] = {
+            "running": False, "done": True, "ok": ok,
+            "msg": "Install complete!" if ok else f"Failed: {last_line}"
+        }
+    except Exception as e:
+        _install_states[key] = {"running": False, "done": True, "ok": False, "msg": str(e)}
 
 
 @app.route("/api/pisugar/install", methods=["POST"])
 @login_required
 def api_pisugar_install():
-    global _pisugar_install_state
-    if _pisugar_install_state["running"]:
+    if _install_states["pisugar"]["running"]:
         return jsonify({"ok": True, "msg": "Already installing — please wait…"})
-
     data = request.json or {}
-    model = str(data.get("model", "3"))   # "1"=PiSugar2, "2"=PiSugar2Pro, "3"=PiSugar3
-
-    def do_install():
-        global _pisugar_install_state
-        _pisugar_install_state = {"running": True, "done": False, "ok": False, "msg": "Downloading installer…"}
-        try:
-            rc, out, err = run(["sudo", "bash", "-c",
-                "wget -q https://cdn.pisugar.com/release/pisugar-power-manager.sh "
-                "-O /tmp/pisugar-pm.sh"], timeout=60)
-            if rc != 0:
-                _pisugar_install_state = {"running": False, "done": True, "ok": False,
-                                          "msg": f"Download failed: {err}"}
-                return
-            _pisugar_install_state["msg"] = "Running installer (selecting PiSugar 3)…"
-            rc, out, err = run(["sudo", "bash", "-c",
-                f"echo {model} | bash /tmp/pisugar-pm.sh -c release"],
-                timeout=300)
-            if rc != 0:
-                _pisugar_install_state = {"running": False, "done": True, "ok": False,
-                                          "msg": f"Install failed: {err or out}"}
-                return
-            run(["sudo", "systemctl", "enable", "pisugar-server"])
-            run(["sudo", "systemctl", "start",  "pisugar-server"])
-            _pisugar_install_state = {"running": False, "done": True, "ok": True,
-                                      "msg": "PiSugar Power Manager installed successfully!"}
-        except Exception as e:
-            _pisugar_install_state = {"running": False, "done": True, "ok": False,
-                                      "msg": str(e)}
-
-    threading.Thread(target=do_install, daemon=True).start()
-    return jsonify({"ok": True, "msg": "Install started…"})
+    model = str(data.get("model", "3"))
+    script = os.path.join(SCRIPTS_DIR, "install_pisugar.sh")
+    threading.Thread(target=run_install_script,
+                     args=("pisugar", script, [model]), daemon=True).start()
+    return jsonify({"ok": True, "msg": "PiSugar install started…"})
 
 
 @app.route("/api/pisugar/install/status")
 @login_required
 def api_pisugar_install_status():
-    return jsonify(_pisugar_install_state)
+    return jsonify(_install_states["pisugar"])
 
 
 @app.route("/api/pisugar/cmd", methods=["POST"])
@@ -693,11 +691,11 @@ def settings_page():
             state = "enabled" if enabled else "disabled"
             msg = ("success", f"E-paper display {state}.")
             if enabled:
-                run(["sudo", "systemctl", "enable", "pitail-display"])
-                run(["sudo", "systemctl", "start",  "pitail-display"])
+                run(["sudo", "/usr/bin/systemctl", "enable", "pitail-display"])
+                run(["sudo", "/usr/bin/systemctl", "start",  "pitail-display"])
             else:
-                run(["sudo", "systemctl", "stop",    "pitail-display"])
-                run(["sudo", "systemctl", "disable", "pitail-display"])
+                run(["sudo", "/usr/bin/systemctl", "stop",    "pitail-display"])
+                run(["sudo", "/usr/bin/systemctl", "disable", "pitail-display"])
 
         elif action == "toggle_pisugar":
             enabled = request.form.get("pisugar_enabled") == "1"
@@ -730,14 +728,19 @@ def api_sysinfo():
 @app.route("/api/epaper/install", methods=["POST"])
 @login_required
 def api_epaper_install():
-    """Install Waveshare EPD library, Pillow, and qrcode in background."""
-    def do_install():
-        run(["sudo", "apt-get", "install", "-y", "-qq",
-             "python3-pil", "python3-numpy", "fonts-dejavu"], timeout=120)
-        run([f"{INSTALL_DIR}/venv/bin/pip", "install", "--quiet",
-             "waveshare-epd", "qrcode[pil]", "pillow"], timeout=180)
-    threading.Thread(target=do_install, daemon=True).start()
-    return jsonify({"ok": True, "msg": "Installing display libraries… refresh in ~2 minutes"})
+    """Install Waveshare EPD library, Pillow, and qrcode via root helper script."""
+    if _install_states["epaper"]["running"]:
+        return jsonify({"ok": True, "msg": "Already installing — please wait…"})
+    script = os.path.join(SCRIPTS_DIR, "install_epaper.sh")
+    threading.Thread(target=run_install_script,
+                     args=("epaper", script), daemon=True).start()
+    return jsonify({"ok": True, "msg": "E-paper library install started…"})
+
+
+@app.route("/api/epaper/install/status")
+@login_required
+def api_epaper_install_status():
+    return jsonify(_install_states["epaper"])
 
 
 @app.route("/api/epaper/preview")
@@ -747,8 +750,6 @@ def api_epaper_preview():
     cfg = load_config()
     if not cfg.get("epaper_enabled"):
         return jsonify({"enabled": False})
-    # Return data that would be shown on screen
-    _, wifi_ip, sig = get_wifi_status().values() if False else (None, None, None)
     wifi = get_wifi_status()
     ts   = get_tailscale_status()
     info = get_system_info()
@@ -762,8 +763,6 @@ def api_epaper_preview():
         "temp_c":    info.get("temp_c"),
     })
 
-
-INSTALL_DIR = "/opt/pitail"
 
 # ─── Entry point ──────────────────────────────────────────────────────────────
 

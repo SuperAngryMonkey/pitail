@@ -169,12 +169,20 @@
 <script>
 async function installEpaper() {
   const msg = document.getElementById('epaper-install-msg');
-  msg.textContent = 'Installing… ~2 minutes';
   msg.style.color = 'var(--muted)';
   const r = await api('/api/epaper/install', 'POST', {});
-  msg.textContent = r.msg;
-  msg.style.color = r.ok ? 'var(--accent2)' : 'var(--danger)';
+  if (!r.ok) { msg.textContent = r.msg; msg.style.color = 'var(--danger)'; return; }
+  msg.textContent = 'Installing…';
+  const poll = setInterval(async () => {
+    try {
+      const s = await api('/api/epaper/install/status');
+      msg.textContent = s.msg || 'Installing…';
+      if (s.done) {
+        clearInterval(poll);
+        msg.style.color = s.ok ? 'var(--accent2)' : 'var(--danger)';
+      }
+    } catch(e) {}
+  }, 3000);
 }
 </script>
-{% endblock %}
 {% endblock %}

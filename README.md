@@ -160,6 +160,12 @@ https://modclouddownloadprod.blob.core.windows.net/shared/mod-rndis-driver-windo
 
 ## Changelog
 
+### v2.4
+- **Hotspot rewritten using hostapd + dnsmasq** — NetworkManager's hotspot does not reliably enter AP mode on the Pi Zero 2 W (brcmfmac chip); hostapd talks to the driver directly and works
+- Watchdog now hands wlan0 between NetworkManager (client) and hostapd (AP) cleanly
+- Manual hotspot start/stop in the web UI uses the same hostapd path
+- Added `fix_hotspot.sh` to convert an existing install without a full reinstall
+
 ### v2.0
 - Added PiSugar 3 battery integration (disabled by default)
 - Battery page: gauge, voltage, charge state, auto-shutdown, charge protection, RTC sync, button mapping
