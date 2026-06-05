@@ -170,7 +170,7 @@ cp -r "$SCRIPT_DIR/static/"     "$INSTALL_DIR/" 2>/dev/null || mkdir -p "$INSTAL
 
 # Python venv
 info "Creating Python virtual environment…"
-python3 -m venv "$INSTALL_DIR/venv"
+python3 -m venv --system-site-packages "$INSTALL_DIR/venv"
 "$INSTALL_DIR/venv/bin/pip" install --quiet --upgrade pip
 "$INSTALL_DIR/venv/bin/pip" install --quiet flask flask-session
 

@@ -1,4 +1,11 @@
 #!/usr/bin/env bash
+# PiTail e-paper fix — installs/repairs Waveshare 2.13" V3 display libraries.
+# Run: sudo bash fix_epaper.sh
+set -uo pipefail
+echo "[*] Refreshing install_epaper.sh and running it..."
+mkdir -p /opt/pitail/scripts
+cat > /opt/pitail/scripts/install_epaper.sh << 'EPAPEREOF'
+#!/usr/bin/env bash
 # PiTail helper — installs Waveshare 2.13" V3 EPD libraries into the pitail venv.
 # Called via sudo from the web UI. Designed to be resilient: it does NOT use
 # 'set -e' because several steps are best-effort, and a hard exit would leave
@@ -80,3 +87,8 @@ else
   echo "[$(date)] === E-paper install finished with MISSING modules (see above) ==="
   exit 1
 fi
+EPAPEREOF
+chmod +x /opt/pitail/scripts/install_epaper.sh
+echo "[*] Running e-paper install..."
+sudo bash /opt/pitail/scripts/install_epaper.sh
+echo "[*] Done. If all modules report OK, enable E-Paper in Settings."
