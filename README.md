@@ -193,4 +193,4 @@ https://modclouddownloadprod.blob.core.windows.net/shared/mod-rndis-driver-windo
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).
